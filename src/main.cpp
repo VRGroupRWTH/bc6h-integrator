@@ -1,3 +1,4 @@
+#include "dataset.hpp"
 #include "imgui.h"
 #include "liblava/lava.hpp"
 #include <cassert>
@@ -6,71 +7,26 @@
 #include <cstdint>
 #include <glm/fwd.hpp>
 #include <iterator>
+#include <liblava/file/file_utils.hpp>
+#include <liblava/frame/input.hpp>
+#include <liblava/resource/mesh.hpp>
+#include <liblava/resource/texture.hpp>
 #include <memory>
+#include <shaderc/shaderc.hpp>
 #include <spdlog/spdlog.h>
 #include <unordered_map>
 #include <vulkan/vulkan_core.h>
 
-struct KtxHeader {
-    std::byte identifier[12];
-    std::uint32_t endianess;
-    std::uint32_t gl_type;
-    std::uint32_t gl_type_size;
-    std::uint32_t gl_format;
-    std::uint32_t gl_internal_format;
-    std::uint32_t gl_base_internal_format;
-    std::uint32_t pixel_width;
-    std::uint32_t pixel_height;
-    std::uint32_t pixel_depth;
-    std::uint32_t number_of_array_elements;
-    std::uint32_t number_of_faces;
-    std::uint32_t number_of_mipmap_levels;
-    std::uint32_t bytes_of_key_value_data;
-};
-
-struct Slice {
-    VkImage image;
-    VkDeviceMemory memory;
-};
-
-std::optional<Slice> create_slice(VkDevice device, glm::uvec3 extend, std::uint32_t size_in_bytes) {
-    VkImageCreateInfo image_info{};
-    image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    image_info.imageType = VK_IMAGE_TYPE_2D;
-    image_info.extent.width = extend.x;
-    image_info.extent.height = extend.y;
-    image_info.extent.depth = extend.z;
-    image_info.mipLevels = 1;
-    image_info.arrayLayers = 1;
-    image_info.format = VK_FORMAT_BC6H_SFLOAT_BLOCK;
-    image_info.tiling = VK_IMAGE_TILING_LINEAR;
-    image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
-    image_info.samples = VK_SAMPLE_COUNT_1_BIT;
-    image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    Slice slice;
-    if (vkCreateImage(device, &image_info, nullptr, &slice.image) != VK_SUCCESS) {
-        spdlog::error("failed to create slice image");
-        return std::nullopt;
-    }
-
-    VkMemoryAllocateInfo mem_alloc_info = {};
-    mem_alloc_info.memoryTypeIndex = 4; // TODO: Device local, host visible memory
-    mem_alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    mem_alloc_info.allocationSize = size_in_bytes;
-    if (vkAllocateMemory(device, &mem_alloc_info, nullptr, &slice.memory) != VK_SUCCESS) {
-        spdlog::error("failed to create slice memory");
-        return std::nullopt;
-    }
-
-    return slice;
-}
+#include "imfilebrowser.hpp"
 
 template <typename Rep, typename Period>
 std::uint64_t to_ms(std::chrono::duration<Rep, Period> duration) {
     return std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
 }
+
+struct DebugDataset {
+    lava::texture::ptr texure;
+};
 
 int main(int argc, char* argv[]) {
     lava::engine app("imgui demo", {argc, argv});
@@ -78,89 +34,172 @@ int main(int argc, char* argv[]) {
     if (!app.setup())
         return lava::error::not_ready;
 
-    app.on_create = []() {
-        std::ifstream file("/home/so225523/Data/BC6/Data/abc/abc2_highest_norm.ktx", std::ios::binary);
-        if (!file) {
+    auto quad = lava::create_mesh(app.device, lava::mesh_type::quad);
+
+    lava::pipeline_layout::ptr layout;
+    lava::render_pipeline::ptr pipeline;
+
+    lava::descriptor::ptr descriptor;
+    lava::descriptor::pool::ptr descriptor_pool;
+    VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
+
+    auto dataset = Dataset::load_ktx("/home/so225523/Data/BC6/Data/abc/abc2_highest_norm.ktx");
+    auto view = 
+    ImGui::FileBrowser file_dialog;
+    file_dialog.SetPwd("/home/so225523/Data/BC6/Data/abc/");
+    file_dialog.SetTitle("Load Dataset");
+    file_dialog.SetTypeFilters({".ktx"});
+
+    std::optional<DebugDataset> debug_dataset;
+
+    ImGui::GetIO().FontGlobalScale = 2.0f;
+
+    app.on_create = [&]() {
+        layout = lava::pipeline_layout::make();
+        if (!layout->create(app.device)) {
             return false;
         }
 
-        glm::uvec4 dimensions;
+        pipeline = lava::render_pipeline::make(app.device, app.pipeline_cache);
+        pipeline->set_layout(layout);
 
-        KtxHeader header;
-        file.read(reinterpret_cast<char*>(&header), sizeof(header));
-
-        std::unique_ptr<std::byte[]> data;
-
-        // struct Slice {
-        //     std::byte* pointer;
-        // };
-
-        // std::vector<Slice> slices;
-        
-        std::unordered_map<std::string, std::vector<char>> key_value_data;
-        {
-            const auto end_of_key_value_data = file.tellg() + std::fstream::pos_type(header.bytes_of_key_value_data);
-            std::vector<char> read_buffer;
-            while (file.tellg() < end_of_key_value_data) {
-                std::uint32_t key_and_value_byte_size;
-                file.read(reinterpret_cast<char*>(&key_and_value_byte_size), sizeof(key_and_value_byte_size));
-                read_buffer.resize(key_and_value_byte_size);
-                file.read(read_buffer.data(), key_and_value_byte_size);
-
-                auto null_terminator = std::find(read_buffer.begin(), read_buffer.end(), '\0');
-                assert(null_terminator != read_buffer.end());
-                key_value_data.insert(std::make_pair(std::string(read_buffer.begin(), null_terminator), std::vector(std::next(null_terminator), read_buffer.end())));
-                std::array<char, 3> padding;
-                file.read(padding.data(), 3 - ((key_and_value_byte_size + 3) % 4));
-            }
-        }
-
-        if (!key_value_data.contains("Dimensions")) {
-            spdlog::error("dimensions missing in dataset");
+        if (!pipeline->add_shader(lava::file_data("/home/so225523/Code/bc6h-integrator/build/debug_vert.spirv"), VK_SHADER_STAGE_VERTEX_BIT)) {
             return false;
         }
 
-        dimensions = *reinterpret_cast<glm::ivec4*>(key_value_data.at("Dimensions").data());
-        spdlog::info("simensions: {}x{}x{}x{}", dimensions.x, dimensions.y, dimensions.z, dimensions.w);
-
-
-        std::vector<Slice> available_slices;
-
-        {
-            using Clock = std::chrono::steady_clock;
-            std::uint32_t image_size;
-            file.read(reinterpret_cast<char*>(&image_size), sizeof(image_size));
-
-
-            spdlog::info("allocating memory");
-            const auto t0 = Clock::now();
-            data = std::make_unique<std::byte[]>(image_size);
-            const auto t1 = Clock::now();
-            spdlog::info("finished allocating memory ({}ms)", to_ms(t1 - t0));
-
-            assert(image_size % dimensions.w == 0);
-
-            std::uint32_t time_slice_size = image_size / dimensions.w;
-
-            spdlog::info("slice size: {} ({}MiB)", time_slice_size, static_cast<double>(time_slice_size) / (1024 * 1024));
-
-            spdlog::info("loading slices");
-            const auto t2 = Clock::now();
-            for (std::uint32_t t = 0; t < dimensions.w; ++t) {
-                // spdlog::info("Reading slice {}", t);
-                file.read(reinterpret_cast<char*>(data.get() + t * time_slice_size), time_slice_size);
-                // spdlog::info("Finished reading slice {}", t);
-            }
-            const auto t3 = Clock::now();
-            spdlog::info("finished loading slices ({}ms total, {}ms per slice)", to_ms(t3 - t2), static_cast<double>(to_ms(t3 - t2)) / time_slice_size);
+        if (!pipeline->add_shader(lava::file_data("/home/so225523/Code/bc6h-integrator/build/debug_frag.spirv"), VK_SHADER_STAGE_FRAGMENT_BIT)) {
+            return false;
         }
 
-        spdlog::info("read {} bytes", file.tellg());
+        pipeline->add_color_blend_attachment();
+
+        pipeline->set_vertex_input_binding({0, sizeof(lava::vertex), VK_VERTEX_INPUT_RATE_VERTEX});
+
+        pipeline->set_vertex_input_attributes({
+            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, lava::to_ui32(offsetof(lava::vertex, position))},
+            {1, 0, VK_FORMAT_R32G32_SFLOAT, lava::to_ui32(offsetof(lava::vertex, uv))},
+        });
+
+        descriptor = lava::descriptor::make();
+        descriptor->add_binding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT);
+        if (!descriptor->create(app.device)) {
+            return false;
+        }
+
+        descriptor_pool = lava::descriptor::pool::make();
+        if (!descriptor_pool->create(app.device, {
+                                                     {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},
+                                                 })) {
+            return false;
+        }
+
+        layout = lava::pipeline_layout::make();
+        layout->add(descriptor);
+
+        if (!layout->create(app.device))
+            return false;
+
+        pipeline->set_layout(layout);
+
+        descriptor_set = descriptor->allocate(descriptor_pool->get());
+
+        pipeline->on_process = [&](VkCommandBuffer cmd_buf) {
+            if (debug_dataset.has_value()) {
+                debug_dataset->texure->stage(cmd_buf);
+                layout->bind(cmd_buf, descriptor_set);
+                quad->bind_draw(cmd_buf);
+            }
+        };
+
+        lava::render_pass::ptr render_pass = app.shading.get_pass();
+
+        if (!pipeline->create(render_pass->get()))
+            return false;
+
+        render_pass->add_front(pipeline);
 
         return true;
     };
+    app.imgui.on_draw = [&]() {
+        if (ImGui::Begin("General")) {
+            if (ImGui::CollapsingHeader("Dataset", ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (dataset) {
+                    ImGui::InputInt4("Dimensions", &dataset->dimensions.x, ImGuiInputTextFlags_ReadOnly);
+                    bool debug = debug_dataset.has_value();
+                    bool load_texture = false;
+                    if (ImGui::Checkbox("Debug", &debug)) {
+                        if (debug) {
+                            debug_dataset.emplace();
+                            debug_dataset->z_slice = 1;
+                            debug_dataset->t_slice = 1;
+                            debug_dataset->texure = lava::texture::make();
+                            if (!debug_dataset->texure->create(app.device, glm::uvec2(dataset->dimensions), VK_FORMAT_BC6H_SFLOAT_BLOCK)) {
+                                spdlog::error("failed to create texture");
+                            }
+                            const VkWriteDescriptorSet write_desc_sampler{
+                                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                .dstSet = descriptor_set,
+                                .dstBinding = 0,
+                                .descriptorCount = 1,
+                                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                .pImageInfo = debug_dataset->texure->get_descriptor_info(),
+                            };
 
-    app.imgui.on_draw = []() { ImGui::ShowDemoWindow(); };
+                            app.device->vkUpdateDescriptorSets({write_desc_sampler});
+                        } else {
+                            debug_dataset.reset();
+                        }
+                        load_texture = true;
+                    }
+                    if (debug) {
+                        if (ImGui::DragInt("Z", &debug_dataset->z_slice, 1.0, 1, dataset->dimensions.z)) {
+                            load_texture = true;
+                        }
+                        if (ImGui::DragInt("T", &debug_dataset->t_slice, 1.0, 1, dataset->dimensions.w)) {
+                            load_texture = true;
+                        }
+                        if (load_texture) {
+                            lava::timer sw;
+                            std::vector<std::byte> data(dataset->z_size_in_bytes);
+                            dataset->read_z_slice(debug_dataset->z_slice - 1, debug_dataset->t_slice - 1, data.data());
+                            debug_dataset->texure->upload(data.data(), data.size());
+                            spdlog::info("loaded slice z={}, t={} in {}ms", debug_dataset->z_slice, debug_dataset->t_slice, to_ms(sw.elapsed()));
+                        }
+                    }
+                    if (ImGui::Button("Unload")) {
+                        dataset.reset();
+                    }
+                } else {
+                    if (ImGui::Button("Browse")) {
+                        file_dialog.Open();
+                    }
+                }
+            }
+        }
+        ImGui::End();
+
+        file_dialog.Display();
+        if (file_dialog.HasSelected()) {
+            dataset = Dataset::load_ktx(file_dialog.GetSelected());
+            file_dialog.ClearSelected();
+        }
+    };
+
+    lava::input_callback input_callback;
+    input_callback.on_key_event = [&app](const lava::key_event& event) {
+        if (event.pressed(lava::key::escape)) {
+            app.shut_down();
+            return true;
+        }
+        return false;
+    };
+
+    app.input.add(&input_callback);
+
+    app.on_destroy = [&]() {
+        pipeline->destroy();
+        layout->destroy();
+    };
 
     return app.run();
 }

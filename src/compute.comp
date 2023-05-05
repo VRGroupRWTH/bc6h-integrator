@@ -1,0 +1,28 @@
+#version 450 core
+
+layout(set = 0, binding = 0) uniform sampler3D slice;
+layout(std140, binding = 1) buffer average_buffer {
+   vec3 average;
+};
+
+layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+    vec3 avg;
+
+    ivec3 size = textureSize(slice, 0);
+    float count = 0.0;
+
+    for (int z = 0; z < size.z; ++z) {
+        for (int y = 0; y < size.y; ++y) {
+            for (int x = 0; x < size.x; ++x) {
+                float total = count + 1;
+                avg = count / total * avg + 1.0 / total * texture(slice, vec3(0.0, 0.0, 0.0)).rgb;
+                count = total;
+            }
+        }
+    }
+
+    average = avg;
+}
