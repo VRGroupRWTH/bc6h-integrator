@@ -1,0 +1,13 @@
+---
+IndentWidth: 4
+ColumnLimit: 0
+AlignAfterOpenBracket: BlockIndent
+AllowShortFunctionsOnASingleLine: All
+IndentCaseLabels: true
+---
+Language: Cpp
+
+# Force pointers to the type for C++.
+DerivePointerAlignment: false
+PointerAlignment: Left
+---
