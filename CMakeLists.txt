@@ -8,17 +8,23 @@ set(CMAKE_CXX_STANDARD 20)
 set(CXX_STANDARD_REQUIRED ON)
 
 CPMAddPackage("gh:liblava/liblava#0.7.3")
+CPMAddPackage("gh:soehrl/cpp-sync#feature/rename-namespace")
 
 add_executable(
   bc6h-integrator
   src/main.cpp
+  src/application.hpp src/application.cpp
   src/dataset.hpp src/dataset.cpp
   src/integrator.hpp src/integrator.cpp
+  src/data_source.hpp src/data_source.cpp
   src/dataset_view.hpp src/dataset_view.cpp
   src/compute.comp
+  src/dataset_view.vert src/dataset_view.frag
 )
 
 target_link_libraries(
   bc6h-integrator
-  PRIVATE lava::engine shaderc
+  PRIVATE lava::engine shaderc sync::sync
 )
+
+compile_shaders(bc6h-integrator)

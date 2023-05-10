@@ -1,29 +1,90 @@
 #pragma once
 
-#include <filesystem>
-#include <fstream>
-#include <glm/vec4.hpp>
-#include <ios>
+#include "data_source.hpp"
+#include <liblava/base/device.hpp>
 #include <memory>
-#include <vector>
+#include <optional>
+#include <thread>
+#include <vulkan/vulkan_core.h>
+#include <sync/rwlock.hpp>
 
 struct Dataset {
     using Ptr = std::shared_ptr<Dataset>;
 
-    enum class Format {
-        Float32,
-        BC6H,
+    Dataset(DataSource::Ptr data) : data(data), loading_state(LoadingState()) {}
+    ~Dataset() { destroy(); }
+
+    static Ptr create(lava::device_p device, DataSource::Ptr data);
+    void destroy();
+
+    DataSource::Ptr data;
+    struct TimeSlice {
+        TimeSlice() = default;
+        TimeSlice(const TimeSlice&) = delete;
+        TimeSlice(TimeSlice&& other) : device(other.device), image(other.image), allocation(other.allocation) {
+            other.device = nullptr;
+            other.image = VK_NULL_HANDLE;
+            other.allocation = VK_NULL_HANDLE;
+        }
+        TimeSlice& operator=(const TimeSlice&) = delete;
+        ~TimeSlice();
+
+        bool create(lava::device_p device, const DataSource::Ptr& data, int t);
+
+        lava::device_p device = nullptr;
+        VkImage image = VK_NULL_HANDLE;
+        VkImageView view = VK_NULL_HANDLE;
+        VmaAllocation allocation = VK_NULL_HANDLE;
     };
+    std::vector<TimeSlice> time_slices;
+    std::thread loading_thread;
 
-    static Ptr load_raw(const std::filesystem::path& path, glm::uvec4 dimensions);
-    static Ptr load_ktx(const std::filesystem::path& path);
+    lava::device_p device = nullptr;
+    VkSampler sampler = VK_NULL_HANDLE;
 
-    std::streampos get_offset(int z, int t);
-    void read_z_slice(int z, int t, void* out);
+    struct StagingBuffer {
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VmaAllocation allocation = VK_NULL_HANDLE;
+        VmaAllocationInfo allocation_info;
+        VmaAllocator allocator;
 
-    std::ifstream file;
-    glm::ivec4 dimensions;
-    std::streampos data_offset;
-    std::streamoff time_size_in_bytes;
-    std::streamoff z_size_in_bytes;
+        ~StagingBuffer() {
+            if (buffer && allocation && allocator) {
+                vmaDestroyBuffer(this->allocator, this->buffer, this->allocation);
+            }
+        }
+    };
+    std::optional<StagingBuffer> staging;
+
+    struct LoadingState {
+        enum class Step {
+            STARTING,
+            STAGING_BUFFER_ALLOCATION,
+            READ_DATA,
+            TEXTURE_ALLOCATION,
+            TRANSFER,
+            FINISHED,
+            ERROR,
+        };
+        Step step = Step::STARTING;
+        int current_substep = 0;
+        int substep_count = 1;
+
+        void set_step(Step step, int substep_count = 1) {
+            this->step = step;
+            this->substep_count = substep_count;
+            this->current_substep = 0;
+        }
+        void advance_substep() {
+            this->current_substep += 1;
+        }
+    };
+    cppsync::read_write_lock<LoadingState> loading_state;
+
+    bool is_loading();
+    bool loaded();
+    void imgui();
+    bool transfer_if_necessary(VkCommandBuffer command_buffer);
+
+    static void load(lava::device_p device, Ptr dataset);
 };
