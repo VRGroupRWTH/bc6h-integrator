@@ -2,6 +2,7 @@
 
 #include "dataset.hpp"
 #include "dataset_view.hpp"
+#include "integrator.hpp"
 #include "imgui.h"
 #include <filesystem>
 #include <glm/fwd.hpp>
@@ -22,6 +23,7 @@ class Application {
     lava::engine engine;
     Dataset::Ptr dataset;
     DatasetView::Ptr view;
+    Integrator::Ptr integrator;
     ImGui::FileBrowser file_dialog;
     bool unload = false;
     glm::vec3 clear_color = glm::vec3(1.0, 1.0, 1.0);

@@ -29,12 +29,13 @@ struct Dataset {
         TimeSlice& operator=(const TimeSlice&) = delete;
         ~TimeSlice();
 
-        bool create(lava::device_p device, const DataSource::Ptr& data, int t);
+        bool create(lava::device_p device, const DataSource::Ptr& data, int t, VkSampler sampler);
 
         lava::device_p device = nullptr;
         VkImage image = VK_NULL_HANDLE;
         VkImageView view = VK_NULL_HANDLE;
         VmaAllocation allocation = VK_NULL_HANDLE;
+        VkDescriptorImageInfo image_info;
     };
     std::vector<TimeSlice> time_slices;
     std::thread loading_thread;

@@ -1,5 +1,6 @@
 #include "application.hpp"
 #include <GLFW/glfw3.h>
+#include <vulkan/vulkan_core.h>
 
 Application::Application(int argc, char* argv[]) : engine("bc6h integrator", {argc, argv}) {
     this->file_dialog.SetPwd("/home/so225523/Data/BC6/Data/abc/");
@@ -8,19 +9,32 @@ Application::Application(int argc, char* argv[]) : engine("bc6h integrator", {ar
 }
 
 bool Application::setup() {
+
+    this->engine.platform.on_create_param = [](lava::device::create_param& device_param) {
+        device_param.features.fillModeNonSolid = true;
+        device_param.features.multiDrawIndirect = true;
+        device_param.queue_family_infos[0].queues[0].priority = 0.5;
+        device_param.add_queue(VK_QUEUE_COMPUTE_BIT, 1.0);
+    };
+
     if (!this->engine.setup()) {
         return false;
     }
 
+    this->engine.camera.set_active(true);
     this->adjust_ui_scale();
 
     this->engine.shading.get_pass()->set_clear_color(this->clear_color);
     this->engine.on_update = [this](lava::delta dt) {
         if (this->unload) {
             this->engine.device->wait_for_idle();
+            this->integrator->prepare_for_dataset(nullptr);
             this->view = nullptr;
             this->dataset = nullptr;
             this->unload = false;
+        }
+        if (this->engine.camera.activated()) {
+            this->engine.camera.update_view(dt, this->engine.input.get_mouse_position());
         }
         return true;
     };
@@ -45,6 +59,11 @@ bool Application::setup() {
 
     this->engine.input.add(&this->input_callback);
 
+    this->integrator = Integrator::make();
+    if (!this->integrator->create(this->engine)) {
+        return false;
+    }
+
     // this->engine.on_destroy = [this]() {
     //     this->view.reset();
     // };
@@ -60,6 +79,7 @@ void Application::load_dataset(const std::filesystem::path& path) {
         if (this->view) {
             this->view->create(this->engine);
         }
+        this->integrator->prepare_for_dataset(this->dataset);
     }
 }
 
@@ -95,9 +115,12 @@ void Application::imgui() {
             }
         }
 
-        if (this->dataset && this->view) {
-            if (this->dataset->loaded() && ImGui::CollapsingHeader("Debug View", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (this->dataset && this->dataset->loaded()) {
+            if (this->view && ImGui::CollapsingHeader("Debug View", ImGuiTreeNodeFlags_DefaultOpen)) {
                 this->view->imgui();
+            }
+            if (this->integrator && ImGui::CollapsingHeader("Integration", ImGuiTreeNodeFlags_DefaultOpen)) {
+                this->integrator->imgui();
             }
         }
     }

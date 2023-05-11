@@ -49,7 +49,7 @@ bool DatasetView::create(lava::app& app) {
     }
 
     auto color_attachment = lava::attachment::make(render_target->get_format());
-    color_attachment->set_load_op(VK_ATTACHMENT_LOAD_OP_CLEAR);
+    // color_attachment->set_load_op(VK_ATTACHMENT_LOAD_OP_CLEAR);
     color_attachment->set_final_layout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
     this->pipeline = lava::render_pipeline::make(device, app.pipeline_cache);
@@ -113,19 +113,13 @@ void DatasetView::render(VkCommandBuffer command_buffer) {
             this->descriptor_sets.reserve(num_time_slices);
             for (unsigned t = 0; t < num_time_slices; ++t) {
                 VkDescriptorSet descriptor_set = this->descriptor->allocate(this->descriptor_pool->get());
-                const VkDescriptorImageInfo image_info{
-                    .sampler = this->dataset->sampler,
-                    .imageView = this->dataset->time_slices[t].view,
-                    .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                };
-
                 const VkWriteDescriptorSet descriptor_write{
                     .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                     .dstSet = descriptor_set,
                     .dstBinding = 0,
                     .descriptorCount = 1,
                     .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    .pImageInfo = &image_info,
+                    .pImageInfo = &this->dataset->time_slices[t].image_info,
                 };
                 vkUpdateDescriptorSets(this->descriptor->get_device()->get(), 1, &descriptor_write, 0, nullptr);
                 this->descriptor_sets.push_back(descriptor_set);

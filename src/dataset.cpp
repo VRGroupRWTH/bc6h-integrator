@@ -7,7 +7,7 @@
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan_core.h>
 
-bool Dataset::TimeSlice::create(lava::device_p device, const DataSource::Ptr& data, int t) {
+bool Dataset::TimeSlice::create(lava::device_p device, const DataSource::Ptr& data, int t, VkSampler sampler) {
     assert(this->image == VK_NULL_HANDLE);
     assert(this->view == VK_NULL_HANDLE);
     assert(this->allocation == VK_NULL_HANDLE);
@@ -76,6 +76,11 @@ bool Dataset::TimeSlice::create(lava::device_p device, const DataSource::Ptr& da
     };
 
     device->vkCreateImageView(&image_view_info, &this->view);
+
+    this->image_info.sampler = sampler;
+    this->image_info.imageView = this->view;
+    this->image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
     return true;
 }
 
@@ -211,7 +216,7 @@ void Dataset::load(lava::device_p device, Ptr dataset) {
     sw.reset();
     std::vector<TimeSlice> time_slices(data->dimensions.w);
     for (int t = 0; t < data->dimensions.w; ++t) {
-        if (!time_slices[t].create(device, data, t)) {
+        if (!time_slices[t].create(device, data, t, dataset->sampler)) {
             lava::log()->error("failed to allocate time slice t={}", t);
             dataset->loading_state.write()->set_step(LoadingState::Step::ERROR);
             return;

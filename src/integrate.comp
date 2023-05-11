@@ -1,0 +1,21 @@
+#version 450 core
+#extension GL_GOOGLE_include_directive : require
+
+#include "integration.glsl"
+
+/* layout (local_size_x, local_size_y, local_size_z) in; */
+void main()
+{
+    const uint seed_id =
+        gl_GlobalInvocationID.x +
+        gl_GlobalInvocationID.y * gl_NumWorkGroups.x +
+        gl_GlobalInvocationID.z * gl_NumWorkGroups.x * gl_NumWorkGroups.y;
+    const uint line_buffer_offset = seed_id * constants.step_count;
+    
+    const vec3 position = vec3(
+        gl_GlobalInvocationID.x / float(gl_NumWorkGroups.x - 1) * constants.dataset_dimensions.x,
+        gl_GlobalInvocationID.y / float(gl_NumWorkGroups.y - 1) * constants.dataset_dimensions.y,
+        gl_GlobalInvocationID.z / float(gl_NumWorkGroups.z - 1) * constants.dataset_dimensions.z
+    );
+    vertices[line_buffer_offset] = position;
+}
