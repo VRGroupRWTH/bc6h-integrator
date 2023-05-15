@@ -1,5 +1,6 @@
 #include "dataset_view.hpp"
 #include "shaders.hpp"
+#include "time_slices.hpp"
 #include <imgui.h>
 #include <liblava/base/base.hpp>
 #include <liblava/block/render_pass.hpp>
@@ -12,38 +13,35 @@ struct Constants {
     float depth;
 };
 
-DatasetView::DatasetView(Dataset::Ptr dataset) : dataset(dataset) {
-    if (this->dataset) {
-        this->z_slice = (this->dataset->data->dimensions.z + 1) / 2;
-    }
+DatasetView::DatasetView() {
 }
 
 DatasetView::~DatasetView() { destroy(); }
 
 bool DatasetView::create(lava::app& app) {
-    auto device = app.device;
+    this->device = app.device;
     auto render_target = app.target;
 
-    this->quad = lava::create_mesh(device, lava::mesh_type::quad);
+    this->quad = lava::create_mesh(this->device, lava::mesh_type::quad);
 
     this->descriptor = lava::descriptor::make();
     this->descriptor->add_binding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT);
-    if (!descriptor->create(device)) {
+    if (!descriptor->create(this->device)) {
         return false;
     }
 
     this->descriptor_pool = lava::descriptor::pool::make();
-    if (!descriptor_pool->create(device, {
-                                             {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, this->dataset->data->dimensions.w},
-                                         },
-                                 this->dataset->data->dimensions.w)) {
+    if (!descriptor_pool->create(this->device, {
+                                                   {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_TIME_SLICES},
+                                               },
+                                 MAX_TIME_SLICES)) {
         return false;
     }
 
     this->pipeline_layout = lava::pipeline_layout::make();
     this->pipeline_layout->add(this->descriptor);
     this->pipeline_layout->add_push_constant_range({VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(Constants)});
-    if (!pipeline_layout->create(device)) {
+    if (!pipeline_layout->create(this->device)) {
         destroy();
         return false;
     }
@@ -52,7 +50,7 @@ bool DatasetView::create(lava::app& app) {
     // color_attachment->set_load_op(VK_ATTACHMENT_LOAD_OP_CLEAR);
     color_attachment->set_final_layout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
-    this->pipeline = lava::render_pipeline::make(device, app.pipeline_cache);
+    this->pipeline = lava::render_pipeline::make(this->device, app.pipeline_cache);
     this->pipeline->set_layout(this->pipeline_layout);
     this->pipeline->add_color_blend_attachment();
     this->pipeline->set_vertex_input_binding({0, sizeof(lava::vertex), VK_VERTEX_INPUT_RATE_VERTEX});
@@ -81,7 +79,7 @@ bool DatasetView::create(lava::app& app) {
 }
 
 void DatasetView::destroy() {
-    // this->pipeline
+    this->free_descriptor_sets();
     if (this->descriptor_pool) {
         this->descriptor_pool->destroy();
         this->descriptor_pool = nullptr;
@@ -102,28 +100,14 @@ void DatasetView::destroy() {
 }
 
 void DatasetView::render(VkCommandBuffer command_buffer) {
-    if (!this->visible) {
+    if (!this->visible || !this->dataset) {
         return;
     }
 
     const bool dataset_loaded = this->dataset->loaded();
     if (dataset_loaded) {
         if (this->descriptor_sets.size() == 0) {
-            const auto num_time_slices = this->dataset->data->dimensions.w;
-            this->descriptor_sets.reserve(num_time_slices);
-            for (unsigned t = 0; t < num_time_slices; ++t) {
-                VkDescriptorSet descriptor_set = this->descriptor->allocate(this->descriptor_pool->get());
-                const VkWriteDescriptorSet descriptor_write{
-                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .dstSet = descriptor_set,
-                    .dstBinding = 0,
-                    .descriptorCount = 1,
-                    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    .pImageInfo = &this->dataset->time_slices[t].image_info,
-                };
-                vkUpdateDescriptorSets(this->descriptor->get_device()->get(), 1, &descriptor_write, 0, nullptr);
-                this->descriptor_sets.push_back(descriptor_set);
-            }
+            this->allocate_descriptor_sets();
         }
 
         Constants c{
@@ -146,6 +130,41 @@ void DatasetView::imgui() {
     ImGui::DragFloat("Maximum Value", &this->max);
 }
 
-DatasetView::Ptr make_dataset_view(Dataset::Ptr dataset) {
-    return std::make_shared<DatasetView>(dataset);
+
+void DatasetView::set_dataset(Dataset::Ptr dataset) {
+    this->dataset = dataset;
+    this->free_descriptor_sets();
+}
+
+void DatasetView::allocate_descriptor_sets() {
+    assert(this->descriptor);
+    assert(this->descriptor_pool);
+    assert(this->descriptor_sets.size() == 0);
+
+    const auto num_time_slices = this->dataset->data->dimensions.w;
+    this->descriptor_sets.reserve(num_time_slices);
+    std::vector<VkWriteDescriptorSet> descriptor_set_writes;
+    for (unsigned t = 0; t < num_time_slices; ++t) {
+        auto descriptor_set = this->descriptor->allocate(this->descriptor_pool->get());
+        descriptor_set_writes.push_back(VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = descriptor_set,
+            .dstBinding = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .pImageInfo = &this->dataset->time_slices[t].image_info,
+        });
+        this->descriptor_sets.push_back(descriptor_set);
+    }
+    this->device->vkUpdateDescriptorSets(num_time_slices, descriptor_set_writes.data());
+}
+
+void DatasetView::free_descriptor_sets() {
+    if (!this->descriptor || !this->descriptor_pool || this->descriptor_sets.size() == 0) {
+        return;
+    }
+
+    if (!this->descriptor->free(this->descriptor_sets, this->descriptor_pool->get())) {
+        lava::log()->error("failed to free descriptor sets");
+    }
 }

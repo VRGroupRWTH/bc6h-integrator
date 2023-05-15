@@ -119,6 +119,11 @@ std::shared_ptr<DataSource> DataSource::open_ktx_file(const std::filesystem::pat
 void DataSource::imgui() {
     ImGui::InputText("Filename", this->filename.data(), this->filename.length(), ImGuiInputTextFlags_ReadOnly);
     ImGui::InputInt4("Dimensions", reinterpret_cast<int*>(glm::value_ptr(this->dimensions)), ImGuiInputTextFlags_ReadOnly);
+
+    ImGui::DragFloat4("Resolution", glm::value_ptr(this->resolution));
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("The resolution in cells/meter for spatial dimensions and steps/second for time dimension.");
+    }
 }
 
 std::streampos DataSource::get_offset(int z, int t) {

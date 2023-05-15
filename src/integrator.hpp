@@ -2,6 +2,7 @@
 
 #include "dataset.hpp"
 #include "liblava/resource/buffer.hpp"
+#include <iterator>
 #include <liblava/block/compute_pipeline.hpp>
 #include <liblava/block/render_pass.hpp>
 #include <optional>
@@ -12,16 +13,33 @@ class Integrator {
 
     static Ptr make() { return std::make_shared<Integrator>(); }
 
-    bool create(lava::app& app);
-    void destroy();
     void render(VkCommandBuffer command_buffer);
     void imgui();
-    void prepare_for_dataset(Dataset::Ptr dataset);
-    bool integration_in_progress() { return this->integration.has_value(); }
+    void set_dataset(Dataset::Ptr dataset);
+    bool integration_in_progress();
+    void check_for_integration();
+
+    bool create(lava::app& app);
+    void destroy();
+
+    bool create_render_pipeline();
+    void destroy_render_pipeline();
 
   private:
+    bool create_progress_buffer();
+    bool create_command_pool();
+    bool create_query_pool();
+    bool create_descriptor();
+    bool create_compute_pipeline();
+
+    void write_dataset_to_descriptor();
+    void destroy_integration();
+
     void reset_dataset();
     bool integrate();
+
+    lava::app* app;
+    Dataset::Ptr dataset;
 
     struct Integration {
         VkBuffer line_buffer;
@@ -30,15 +48,17 @@ class Integrator {
         VkBuffer indirect_buffer;
         VmaAllocation indirect_buffer_allocation;
 
-        VkDescriptorSet descriptor_set;
+        VkCommandBuffer command_buffer;
+        VkFence command_buffer_fence;
+
         unsigned int seed_count;
         unsigned int integration_steps;
 
-        VkCommandPool command_pool;
+        bool create_buffers(glm::uvec3 seed_spawn, std::uint32_t integration_steps, lava::device_p device, const lava::queue& compute_queue);
+        void update_descriptor_set(lava::device_p device, VkDescriptorSet descriptor_set);
+        void destroy(lava::device_p device, VkCommandPool command_pool);
     };
-    lava::app* app;
     std::optional<Integration> integration;
-    Dataset::Ptr dataset;
 
     // Compute
     lava::buffer::ptr progress_buffer;
@@ -47,6 +67,9 @@ class Integrator {
 
     lava::descriptor::ptr descriptor;
     lava::descriptor::pool::ptr descriptor_pool;
+    VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
+    VkCommandPool command_pool = VK_NULL_HANDLE;
+    VkQueryPool query_pool = VK_NULL_HANDLE;
 
     lava::pipeline_layout::ptr spawn_seeds_pipeline_layout;
     lava::compute_pipeline::ptr spawn_seeds_pipeline;
@@ -54,14 +77,10 @@ class Integrator {
     // Rendering
     lava::pipeline_layout::ptr render_pipeline_layout;
     lava::render_pipeline::ptr render_pipeline;
-    // lava::
-
-    // lava::descriptor::ptr descriptor;
-    // lava::descriptor::pool::ptr descriptor_pool;
-    // std::vector<VkDescriptorSet> descriptor_sets;
-
+    float line_width = 1.0f;
 
     // Integration settings
     glm::uvec3 seed_spawn = {10, 10, 10};
     unsigned int integration_steps = 100;
+    bool should_integrate = false;
 };

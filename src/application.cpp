@@ -9,8 +9,9 @@ Application::Application(int argc, char* argv[]) : engine("bc6h integrator", {ar
 }
 
 bool Application::setup() {
-
     this->engine.platform.on_create_param = [](lava::device::create_param& device_param) {
+        device_param.features.largePoints = true;
+        device_param.features.wideLines = true;
         device_param.features.fillModeNonSolid = true;
         device_param.features.multiDrawIndirect = true;
         device_param.queue_family_infos[0].queues[0].priority = 0.5;
@@ -21,6 +22,20 @@ bool Application::setup() {
         return false;
     }
 
+    this->engine.on_create = [this]() {
+        lava::log()->debug("on_create()");
+        this->view->create(this->engine);
+        this->integrator->create_render_pipeline();
+        return true;
+    };
+
+    this->engine.on_destroy = [this]() {
+        lava::log()->debug("on_destroy()");
+        this->view->destroy();
+        this->integrator->destroy_render_pipeline();
+        return true;
+    };
+
     this->engine.camera.set_active(true);
     this->adjust_ui_scale();
 
@@ -28,14 +43,15 @@ bool Application::setup() {
     this->engine.on_update = [this](lava::delta dt) {
         if (this->unload) {
             this->engine.device->wait_for_idle();
-            this->integrator->prepare_for_dataset(nullptr);
-            this->view = nullptr;
+            this->integrator->set_dataset(nullptr);
+            this->view->set_dataset(nullptr);
             this->dataset = nullptr;
             this->unload = false;
         }
         if (this->engine.camera.activated()) {
             this->engine.camera.update_view(dt, this->engine.input.get_mouse_position());
         }
+        this->integrator->check_for_integration();
         return true;
     };
 
@@ -58,15 +74,12 @@ bool Application::setup() {
     };
 
     this->engine.input.add(&this->input_callback);
-
+    this->view = std::make_shared<DatasetView>();
     this->integrator = Integrator::make();
     if (!this->integrator->create(this->engine)) {
         return false;
     }
 
-    // this->engine.on_destroy = [this]() {
-    //     this->view.reset();
-    // };
 
     return true;
 }
@@ -74,13 +87,8 @@ bool Application::setup() {
 void Application::load_dataset(const std::filesystem::path& path) {
     // state->dataset = Dataset::create(device, DataSource::open_raw_file("/home/so225523/Data/100x100x100x100.raw", glm::uvec4(100, 100, 100, 100)));
     this->dataset = Dataset::create(this->engine.device, DataSource::open_ktx_file(path));
-    if (this->dataset) {
-        this->view = make_dataset_view(this->dataset);
-        if (this->view) {
-            this->view->create(this->engine);
-        }
-        this->integrator->prepare_for_dataset(this->dataset);
-    }
+    this->view->set_dataset(this->dataset);
+    this->integrator->set_dataset(this->dataset);
 }
 
 int Application::run() {
@@ -102,6 +110,15 @@ void Application::adjust_ui_scale() {
 
 void Application::imgui() {
     if (ImGui::Begin("General")) {
+        this->engine.draw_about(true, true);
+        // ImGui::Text("FPS: %f", this->engine->
+        if (ImGui::CollapsingHeader("Camera")) {
+            ImGui::DragFloat3("Position", glm::value_ptr(this->engine.camera.position));
+            ImGui::DragFloat3("Rotation", glm::value_ptr(this->engine.camera.rotation), 0.01f);
+            if (ImGui::Button("Reset")) {
+                this->engine.camera.reset();
+            }
+        }
         if (ImGui::CollapsingHeader("Dataset", ImGuiTreeNodeFlags_DefaultOpen)) {
             if (this->dataset) {
                 this->dataset->imgui();

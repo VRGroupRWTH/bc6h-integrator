@@ -1,7 +1,7 @@
-layout(set = 0, binding = 0) uniform sampler3D dataset[200];
+layout(set = 0, binding = 0) uniform sampler3D dataset[400];
 
 layout(std140, binding = 1) buffer line_buffer {
-   vec3 vertices[];
+   vec4 vertices[];
 };
 
 layout(std140, binding = 2) buffer progress_buffer {
@@ -20,20 +20,22 @@ layout(std140, binding = 3) buffer indirect_buffer {
 };
 
 layout(push_constant) uniform Constants {
-    uvec4 dataset_dimensions;
+    vec4 dataset_resolution;
+    vec4 dataset_dimensions;
     uvec3 seed_dimensions;
     uint step_count;
 } constants;
 
 vec3 sample_dataset(vec4 coordinates) {
-    const int t_floored = int(floor(coordinates.w));
-    const int t_ceiled = int(ceil(coordinates.w));
+    const float sampler_index = coordinates.w * constants.dataset_resolution.w;
+    const int sampler_index_floored = int(floor(sampler_index));
+    const int sampler_index_ceiled = int(ceil(sampler_index));
     const vec3 texture_coordinates = coordinates.xyz / constants.dataset_dimensions.xyz;
 
     return mix(
-        texture(dataset[t_floored], texture_coordinates).xyz,
-        texture(dataset[t_floored], texture_coordinates).xyz,
-        coordinates.w - t_floored
+        texture(dataset[sampler_index_floored], texture_coordinates).xyz,
+        texture(dataset[sampler_index_floored], texture_coordinates).xyz,
+        sampler_index - sampler_index_floored
     );
     
     /* return vec3(1.0, 0.5, 0.1); */
