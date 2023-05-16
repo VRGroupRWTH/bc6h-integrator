@@ -28,6 +28,7 @@ class Application {
     bool unload = false;
     glm::vec3 clear_color = glm::vec3(1.0, 1.0, 1.0);
     lava::input_callback input_callback;
+    bool check_ui_scale = true;
 
     void adjust_ui_scale();
     void imgui();

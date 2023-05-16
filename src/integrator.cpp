@@ -63,9 +63,10 @@ void Integrator::render(VkCommandBuffer command_buffer) {
     const glm::vec3 offset = -this->dataset->data->dimensions_in_meters() * 0.5f;
     const glm::mat4 world = glm::translate(glm::mat4(), offset);
     const glm::mat4 view_projection = this->app->camera.get_view_projection();
-    const glm::mat4 world_view_projection = view_projection ;
+    const glm::mat4 world_view_projection = view_projection;
     this->device->call().vkCmdSetLineWidth(command_buffer, this->line_width);
     this->device->call().vkCmdPushConstants(command_buffer, this->render_pipeline_layout->get(), VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(world_view_projection), &world_view_projection);
+    this->device->call().vkCmdPushConstants(command_buffer, this->render_pipeline_layout->get(), VK_SHADER_STAGE_FRAGMENT_BIT, 16 * 4, sizeof(this->line_color), glm::value_ptr(line_color));
     this->device->call().vkCmdBindVertexBuffers(command_buffer, 0, 1, &this->integration->line_buffer, &buffer_offsets);
     this->device->call().vkCmdDrawIndirect(command_buffer, this->integration->indirect_buffer, 0, this->integration->seed_count, sizeof(VkDrawIndirectCommand));
     // this->device->call().vkCmdDraw(command_buffer, 1, 1, 0, 0);
@@ -113,7 +114,11 @@ void Integrator::imgui() {
         const double duration_ms = duration_ns / 1000.0 / 1000.0;
         ImGui::Text("Duration: %f ms", duration_ms);
     }
-    ImGui::DragFloat("Line Width", &this->line_width, 0.025f, 0.1, 10.0f);
+
+    if (ImGui::CollapsingHeader("Rendering", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::DragFloat("Line Width", &this->line_width, 0.025f, 0.1, 10.0f);
+        ImGui::ColorEdit4("Line Color", glm::value_ptr(this->line_color));
+    }
 }
 
 bool Integrator::create_progress_buffer() {
@@ -199,6 +204,7 @@ bool Integrator::create_descriptor() {
 bool Integrator::create_render_pipeline() {
     this->render_pipeline_layout = lava::pipeline_layout::make();
     this->render_pipeline_layout->add_push_constant_range({VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4)});
+    this->render_pipeline_layout->add_push_constant_range({VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(glm::mat4), sizeof(glm::vec4)});
     if (!render_pipeline_layout->create(device)) {
         destroy();
         return false;
@@ -397,6 +403,7 @@ void Integrator::destroy_integration() {
 bool Integrator::integrate() {
     this->destroy_integration();
     this->integration.emplace();
+    lava::log()->debug("create buffers");
     this->integration->create_buffers(this->seed_spawn, this->integration_steps, this->device, this->compute_queue);
     this->integration->update_descriptor_set(this->device, this->descriptor_set);
     this->write_dataset_to_descriptor();
@@ -429,6 +436,7 @@ bool Integrator::integrate() {
         .seed_dimensions = this->seed_spawn,
         .step_count = this->integration_steps,
     };
+    lava::log()->debug("start integration");
     device->call().vkCmdPushConstants(this->integration->command_buffer, this->spawn_seeds_pipeline_layout->get(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Constants), &c);
     device->call().vkCmdResetQueryPool(this->integration->command_buffer, this->query_pool, 0, 2);
     device->call().vkCmdWriteTimestamp(this->integration->command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, this->query_pool, 0);

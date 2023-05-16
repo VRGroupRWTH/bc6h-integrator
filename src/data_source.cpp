@@ -24,7 +24,7 @@ std::shared_ptr<DataSource> DataSource::open_raw_file(const std::filesystem::pat
         return nullptr;
     }
 
-    spdlog::info("raw dataset loaded (file: {}, dimensions: {}x{}x{}x{})", path.string(), dimensions.x, dimensions.y, dimensions.z, dimensions.w);
+    lava::log()->info("raw dataset loaded (file: {}, dimensions: {}x{}x{}x{})", path.string(), dimensions.x, dimensions.y, dimensions.z, dimensions.w);
 
     auto data_source = std::make_shared<DataSource>(DataSource{
         .filename = path.string(),
@@ -86,7 +86,7 @@ std::shared_ptr<DataSource> DataSource::open_ktx_file(const std::filesystem::pat
     }
 
     if (!key_value_data.contains("Dimensions")) {
-        spdlog::error("dimensions missing in dataset");
+        lava::log()->error("dimensions missing in dataset");
         return nullptr;
     }
 
@@ -101,7 +101,7 @@ std::shared_ptr<DataSource> DataSource::open_ktx_file(const std::filesystem::pat
     assert(time_slice_size % dimensions.z == 0);
     const std::uint32_t z_size_in_bytes = time_slice_size / dimensions.z;
 
-    spdlog::info("ktx dataset loaded (file: {}, dimensions: {}x{}x{}x{})", path.string(), dimensions.x, dimensions.y, dimensions.z, dimensions.w);
+    lava::log()->info("ktx dataset loaded (file: {}, dimensions: {}x{}x{}x{})", path.string(), dimensions.x, dimensions.y, dimensions.z, dimensions.w);
 
     auto dataset = std::make_shared<DataSource>(DataSource{
         .filename = path.string(),

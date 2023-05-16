@@ -78,6 +78,7 @@ class Integrator {
     lava::pipeline_layout::ptr render_pipeline_layout;
     lava::render_pipeline::ptr render_pipeline;
     float line_width = 1.0f;
+    glm::vec4 line_color = glm::vec4(0.0, 0.0, 0.0, 1.0);
 
     // Integration settings
     glm::uvec3 seed_spawn = {10, 10, 10};

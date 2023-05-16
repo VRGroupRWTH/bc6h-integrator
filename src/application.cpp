@@ -24,8 +24,10 @@ bool Application::setup() {
 
     this->engine.on_create = [this]() {
         lava::log()->debug("on_create()");
+        this->engine.shading.get_pass()->set_clear_color(this->clear_color);
         this->view->create(this->engine);
         this->integrator->create_render_pipeline();
+        this->check_ui_scale = true;
         return true;
     };
 
@@ -37,9 +39,7 @@ bool Application::setup() {
     };
 
     this->engine.camera.set_active(true);
-    this->adjust_ui_scale();
 
-    this->engine.shading.get_pass()->set_clear_color(this->clear_color);
     this->engine.on_update = [this](lava::delta dt) {
         if (this->unload) {
             this->engine.device->wait_for_idle();
@@ -80,7 +80,6 @@ bool Application::setup() {
         return false;
     }
 
-
     return true;
 }
 
@@ -106,13 +105,20 @@ void Application::adjust_ui_scale() {
 
     lava::log()->info("set imgui scale to {} (content scale was {{{},{}}})", font_scale, dpi_scale_x, dpi_scale_y);
     ImGui::GetIO().FontGlobalScale = font_scale;
+    this->check_ui_scale = false;
 }
 
 void Application::imgui() {
+    if (this->check_ui_scale) {
+        this->adjust_ui_scale();
+    }
+
     if (ImGui::Begin("General")) {
-        this->engine.draw_about(true, true);
-        // ImGui::Text("FPS: %f", this->engine->
-        if (ImGui::CollapsingHeader("Camera")) {
+        if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
+            glm::vec3 background_color = this->engine.shading.get_pass()->get_clear_color();
+            if (ImGui::ColorEdit4("Background Color", glm::value_ptr(background_color))) {
+                this->engine.shading.get_pass()->set_clear_color(background_color);
+            }
             ImGui::DragFloat3("Position", glm::value_ptr(this->engine.camera.position));
             ImGui::DragFloat3("Rotation", glm::value_ptr(this->engine.camera.rotation), 0.01f);
             if (ImGui::Button("Reset")) {
