@@ -26,12 +26,18 @@ layout(std140, set = 0, binding = 2) buffer indirect_buffer {
    DrawIndirectCommand indirect_draw[];
 };
 
+layout(local_size_x_id = 0) in;               
+layout(local_size_y_id = 1) in;
+layout(local_size_z_id = 2) in;
+
+layout (constant_id = 3) const uint TIME_STEPS = 400;
+
 #if defined(DATA_RAW_TEXTURES)
-layout(set = 0, binding = 3) uniform sampler3D dataset_x[400];
-layout(set = 0, binding = 4) uniform sampler3D dataset_y[400];
-layout(set = 0, binding = 5) uniform sampler3D dataset_z[400];
+layout(set = 0, binding = 3) uniform sampler3D dataset_x[TIME_STEPS];
+layout(set = 0, binding = 4) uniform sampler3D dataset_y[TIME_STEPS];
+layout(set = 0, binding = 5) uniform sampler3D dataset_z[TIME_STEPS];
 #elif defined(DATA_BC6H_TEXTURE)
-layout(set = 0, binding = 3) uniform sampler3D dataset[400];
+layout(set = 0, binding = 3) uniform sampler3D dataset[TIME_STEPS];
 #else
 #error "define something"
 #endif
