@@ -80,6 +80,8 @@ bool Application::setup() {
         return false;
     }
 
+    this->engine.camera.position = glm::vec3(0, 0, 2);
+
     return true;
 }
 
@@ -129,6 +131,7 @@ void Application::imgui() {
             ImGui::DragFloat3("Rotation", glm::value_ptr(this->engine.camera.rotation), 0.01f);
             if (ImGui::Button("Reset")) {
                 this->engine.camera.reset();
+                this->engine.camera.position = glm::vec3(0, 0, 2);
             }
         }
         if (ImGui::CollapsingHeader("Dataset", ImGuiTreeNodeFlags_DefaultOpen)) {
