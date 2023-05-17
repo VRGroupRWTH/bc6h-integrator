@@ -76,3 +76,37 @@ vec3 sample_dataset(vec4 coordinates) {
 #else
 #error "define something"
 #endif
+
+// Runge Kutta 4th Order Method
+vec3 rungekutta4(vec4 coordinates) {
+	vec4 k1 = coordinates;
+	vec3 v1 = sample_dataset(k1);
+
+	vec4 k2 = coordinates + vec4(v1 * 0.5f * constants.dt, 0.5f * constants.dt);
+	vec3 v2 = sample_dataset(k2);
+
+	vec4 k3 = coordinates + vec4(v2 * 0.5f * constants.dt, 0.5f * constants.dt);
+	vec3 v3 = sample_dataset(k3);
+
+	vec4 k4 = coordinates + vec4(v3 * constants.dt, constants.dt);
+	vec3 v4 = sample_dataset(k4);
+
+    return (v1 + 2*v2 + 2*v3 + v4) / 6.0f;
+}
+
+// Newton Midpoint Method / Modified Euler Method
+vec3 newton_midpoint(vec4 coordinates) {
+    vec4 k1 = coordinates;
+	vec3 v1 = sample_dataset(k1);
+
+    vec4 k2 = coordinates + vec4(v1 * 0.5f * constants.dt, 0.5f * constants.dt);
+    vec3 v2 = sample_dataset(k2);
+
+    return v2;
+}
+
+// Newton Method
+vec3 newton(vec4 coordinates)
+{
+	return sample_dataset(coordinates);
+}

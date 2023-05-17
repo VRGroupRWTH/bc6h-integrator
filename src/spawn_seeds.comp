@@ -4,7 +4,7 @@
 #define DATA_RAW_TEXTURES 
 #include "integration.glsl"
 
-layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+layout(local_size_x = 2, local_size_y = 2, local_size_z = 1) in;
 void main()
 {
     if (any(greaterThanEqual(gl_GlobalInvocationID, constants.seed_dimensions))) {
@@ -43,7 +43,8 @@ void main()
             break;
         }
 
-        const vec3 next_position = position + constants.dt * sample_dataset(sample_location);
+        //const vec3 next_position = position + constants.dt * sample_dataset(sample_location);
+        const vec3 next_position = position + constants.dt * rungekutta4(sample_location);
         vertices[line_buffer_offset + s] = vec4(next_position, seed_id);
         position = next_position;
         t += constants.dt;
