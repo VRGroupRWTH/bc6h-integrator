@@ -81,7 +81,9 @@ class Integrator {
     glm::vec4 line_color = glm::vec4(0.0, 0.0, 0.0, 1.0);
 
     // Integration settings
-    glm::uvec3 seed_spawn = {10, 10, 10};
-    unsigned int integration_steps = 100;
+    glm::uvec3 seed_spawn = {20, 20, 20};
+    float delta_time = 0.0001;
+    unsigned int integration_steps = 10000;
+    unsigned int batch_size = 100;
     bool should_integrate = false;
 };

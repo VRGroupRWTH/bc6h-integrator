@@ -2,6 +2,7 @@
 #include "shaders.hpp"
 #include "time_slices.hpp"
 #include <array>
+#include <cstddef>
 #include <glm/gtx/string_cast.hpp>
 #include <imgui.h>
 #include <liblava/app.hpp>
@@ -11,8 +12,16 @@ struct Constants {
     glm::vec4 dataset_resolution;
     glm::vec4 dataset_dimensions;
     glm::uvec3 seed_dimensions;
+    float dt;
+    glm::uint first_step;
     glm::uint step_count;
 };
+
+constexpr std::uint32_t LINE_BUFFER_BINDING = 0;
+constexpr std::uint32_t PROGRESS_BUFFER_BINDING = 1;
+constexpr std::uint32_t INDIRECT_BUFFER_BINDING = 2;
+constexpr std::uint32_t DATASET_BINDING_BASE = 3;
+constexpr glm::uvec3 WORKGROUP_SIZE = {8, 1, 1};
 
 bool Integrator::create(lava::app& app) {
     const auto queues = app.device->compute_queues();
@@ -26,8 +35,6 @@ bool Integrator::create(lava::app& app) {
     this->app = &app;
 
     return this->create_command_pool() &&
-           this->create_descriptor() &&
-           this->create_compute_pipeline() &&
            this->create_query_pool() &&
            this->create_progress_buffer();
 
@@ -74,6 +81,11 @@ void Integrator::render(VkCommandBuffer command_buffer) {
 
 void Integrator::set_dataset(Dataset::Ptr dataset) {
     this->dataset = dataset;
+
+    if (this->dataset) {
+        this->create_descriptor();
+        this->create_compute_pipeline();
+    }
 }
 
 bool Integrator::integration_in_progress() {
@@ -91,6 +103,8 @@ void Integrator::check_for_integration() {
 void Integrator::imgui() {
     ImGui::DragInt3("Seed Dimensions", reinterpret_cast<int*>(glm::value_ptr(this->seed_spawn)));
     ImGui::DragInt("Steps", reinterpret_cast<int*>(&this->integration_steps));
+    ImGui::DragInt("Batch Size", reinterpret_cast<int*>(&this->batch_size));
+    ImGui::DragFloat("Delta Time", &this->delta_time, 0.001f, 0.0f);
 
     ImGui::BeginDisabled(!this->dataset || this->integration_in_progress());
     if (ImGui::Button("Integrate")) {
@@ -131,20 +145,6 @@ bool Integrator::create_progress_buffer() {
     }
     memset(this->progress_buffer->get_mapped_data(), 0, 4);
 
-    const VkDescriptorBufferInfo progress_buffer_info{
-        .buffer = this->progress_buffer->get(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    this->device->vkUpdateDescriptorSets({{
-        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-        .dstSet = this->descriptor_set,
-        .dstBinding = 2,
-        .descriptorCount = 1,
-        .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-        .pBufferInfo = &progress_buffer_info,
-    }});
-
     return true;
 }
 
@@ -173,14 +173,16 @@ bool Integrator::create_query_pool() {
 
 bool Integrator::create_descriptor() {
     this->descriptor = lava::descriptor::make();
-    lava::descriptor::binding::ptr dataset_binding = lava::descriptor::binding::make(0);
-    dataset_binding->set_type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
-    dataset_binding->set_stage_flags(VK_SHADER_STAGE_COMPUTE_BIT);
-    dataset_binding->set_count(MAX_TIME_SLICES);
-    this->descriptor->add(dataset_binding);
+    this->descriptor->add_binding(0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT);
     this->descriptor->add_binding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT);
     this->descriptor->add_binding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT);
-    this->descriptor->add_binding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT);
+    for (int i = 0; i < this->dataset->data->channel_count; ++i) {
+        lava::descriptor::binding::ptr dataset_binding = lava::descriptor::binding::make(3 + i);
+        dataset_binding->set_type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+        dataset_binding->set_stage_flags(VK_SHADER_STAGE_COMPUTE_BIT);
+        dataset_binding->set_count(MAX_TIME_SLICES);
+        this->descriptor->add(dataset_binding);
+    }
     if (!descriptor->create(device)) {
         lava::log()->error("failed to create descriptor for integration");
         return false;
@@ -188,7 +190,7 @@ bool Integrator::create_descriptor() {
 
     this->descriptor_pool = lava::descriptor::pool::make();
     if (!descriptor_pool->create(device, {
-                                             {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_TIME_SLICES},
+                                             {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_TIME_SLICES * this->dataset->data->channel_count},
                                              {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3},
                                          },
                                  1)) {
@@ -197,6 +199,20 @@ bool Integrator::create_descriptor() {
     }
 
     this->descriptor_set = this->descriptor->allocate(this->descriptor_pool->get());
+
+    const VkDescriptorBufferInfo progress_buffer_info{
+        .buffer = this->progress_buffer->get(),
+        .offset = 0,
+        .range = VK_WHOLE_SIZE,
+    };
+    this->device->vkUpdateDescriptorSets({{
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = this->descriptor_set,
+        .dstBinding = PROGRESS_BUFFER_BINDING,
+        .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        .pBufferInfo = &progress_buffer_info,
+    }});
 
     return true;
 }
@@ -273,17 +289,19 @@ bool Integrator::create_compute_pipeline() {
 
 void Integrator::write_dataset_to_descriptor() {
     std::vector<VkWriteDescriptorSet> descriptor_writes;
-    descriptor_writes.reserve(MAX_TIME_SLICES);
+    descriptor_writes.reserve(this->dataset->data->channel_count * MAX_TIME_SLICES);
 
-    for (std::uint32_t i = 0; i < MAX_TIME_SLICES; ++i) {
-        descriptor_writes.push_back(VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = this->descriptor_set,
-            .dstBinding = 0,
-            .dstArrayElement = i,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .pImageInfo = &this->dataset->time_slices[i % this->dataset->time_slices.size()].image_info});
+    for (std::uint32_t c = 0; c < this->dataset->data->channel_count; ++c) {
+        for (std::uint32_t i = 0; i < MAX_TIME_SLICES; ++i) {
+            descriptor_writes.push_back(VkWriteDescriptorSet{
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = this->descriptor_set,
+                .dstBinding = DATASET_BINDING_BASE + c,
+                .dstArrayElement = i,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = &this->dataset->get_image(c, i % this->dataset->data->dimensions.w).image_info});
+        }
     }
     vkUpdateDescriptorSets(this->descriptor->get_device()->get(), descriptor_writes.size(), descriptor_writes.data(), 0, nullptr);
 }
@@ -366,7 +384,7 @@ void Integrator::Integration::update_descriptor_set(lava::device_p device, VkDes
         {
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .dstSet = descriptor_set,
-            .dstBinding = 1,
+            .dstBinding = LINE_BUFFER_BINDING,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             .pBufferInfo = &line_buffer_info,
@@ -374,7 +392,7 @@ void Integrator::Integration::update_descriptor_set(lava::device_p device, VkDes
         {
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .dstSet = descriptor_set,
-            .dstBinding = 3,
+            .dstBinding = INDIRECT_BUFFER_BINDING,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             .pBufferInfo = &indirect_buffer_info,
@@ -434,13 +452,38 @@ bool Integrator::integrate() {
         .dataset_resolution = this->dataset->data->resolution,
         .dataset_dimensions = this->dataset->data->dimensions_in_meters_and_seconds(),
         .seed_dimensions = this->seed_spawn,
+        .dt = this->delta_time,
+        .first_step = 0,
         .step_count = this->integration_steps,
     };
     lava::log()->debug("start integration");
-    device->call().vkCmdPushConstants(this->integration->command_buffer, this->spawn_seeds_pipeline_layout->get(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Constants), &c);
     device->call().vkCmdResetQueryPool(this->integration->command_buffer, this->query_pool, 0, 2);
+
+    device->call().vkCmdPushConstants(this->integration->command_buffer, this->spawn_seeds_pipeline_layout->get(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Constants), &c);
+
     device->call().vkCmdWriteTimestamp(this->integration->command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, this->query_pool, 0);
-    device->call().vkCmdDispatch(this->integration->command_buffer, this->seed_spawn.x, this->seed_spawn.y, this->seed_spawn.z);
+    unsigned int step_count = 0;
+    while (step_count < this->integration_steps) {
+        c.first_step = step_count;
+        c.step_count = std::max(this->integration_steps - step_count, this->batch_size);
+
+        device->call().vkCmdPushConstants(
+            this->integration->command_buffer,
+            this->spawn_seeds_pipeline_layout->get(),
+            VK_SHADER_STAGE_COMPUTE_BIT,
+            offsetof(Constants, first_step),
+            sizeof(uint32_t) * 2,
+            &c.first_step
+        );
+        device->call().vkCmdDispatch(
+            this->integration->command_buffer,
+            (this->seed_spawn.x + WORKGROUP_SIZE.x - 1) / WORKGROUP_SIZE.x,
+            (this->seed_spawn.y + WORKGROUP_SIZE.y - 1) / WORKGROUP_SIZE.y,
+            (this->seed_spawn.z + WORKGROUP_SIZE.z - 1) / WORKGROUP_SIZE.z
+        );
+
+        step_count += c.step_count;
+    }
     device->call().vkCmdWriteTimestamp(this->integration->command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, this->query_pool, 1);
 
     if (vkEndCommandBuffer(this->integration->command_buffer) != VK_SUCCESS) {

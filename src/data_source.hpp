@@ -16,7 +16,7 @@ struct DataSource {
         BC6H,
     };
 
-    static Ptr open_raw_file(const std::filesystem::path& path, glm::uvec4 dimensions);
+    static Ptr open_raw_file(const std::filesystem::path& path);
     static Ptr open_ktx_file(const std::filesystem::path& path);
 
     std::streampos get_offset(int z, int t);
@@ -31,9 +31,11 @@ struct DataSource {
     Format format;
     std::ifstream file;
     glm::uvec4 dimensions;
+    unsigned channel_count;
     glm::vec4 resolution = glm::vec4(1.0, 1.0, 1.0, 1.0);
     std::streampos data_offset;
-    std::streamoff data_size;
-    std::streamoff time_slice_size;
-    std::streamoff z_slice_size;
+    std::streamsize data_size;
+    std::streamsize time_slice_size;
+    std::streamsize z_slice_size;
+    std::streamsize channel_size;
 };

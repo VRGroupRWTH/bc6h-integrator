@@ -84,8 +84,14 @@ bool Application::setup() {
 }
 
 void Application::load_dataset(const std::filesystem::path& path) {
-    // state->dataset = Dataset::create(device, DataSource::open_raw_file("/home/so225523/Data/100x100x100x100.raw", glm::uvec4(100, 100, 100, 100)));
-    this->dataset = Dataset::create(this->engine.device, DataSource::open_ktx_file(path));
+    if (path.extension() == ".raw") {
+        this->dataset = Dataset::create(this->engine.device, DataSource::open_raw_file(path));
+    } else if (path.extension() == ".ktx") {
+        this->dataset = Dataset::create(this->engine.device, DataSource::open_ktx_file(path));
+    } else {
+        lava::log()->warn("Unknown extension: {}", path.extension().string());
+        return;
+    }
     this->view->set_dataset(this->dataset);
     this->integrator->set_dataset(this->dataset);
 }
@@ -147,6 +153,8 @@ void Application::imgui() {
             }
         }
     }
+    ImGui::Separator();
+    ImGui::Text("FPS: %f", ImGui::GetIO().Framerate);
     ImGui::End();
 
     this->file_dialog.Display();

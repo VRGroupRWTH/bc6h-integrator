@@ -5,7 +5,7 @@
 #include <liblava/util/log.hpp>
 #include <spdlog/spdlog.h>
 
-std::shared_ptr<DataSource> DataSource::open_raw_file(const std::filesystem::path& path, glm::uvec4 dimensions) {
+std::shared_ptr<DataSource> DataSource::open_raw_file(const std::filesystem::path& path) {
     std::ifstream file(path, std::ios::binary);
 
     if (!file) {
@@ -13,12 +13,17 @@ std::shared_ptr<DataSource> DataSource::open_raw_file(const std::filesystem::pat
         return nullptr;
     }
 
-    const unsigned depth_slice_size = dimensions.x * dimensions.y * sizeof(float) * 4; // 4 floats per entry
-    const unsigned time_slice_size = depth_slice_size * dimensions.z;
+    glm::uvec4 dimensions;
+    file.read(reinterpret_cast<char*>(glm::value_ptr(dimensions)), sizeof(dimensions));
+
+    const std::streamsize depth_slice_size = dimensions.x * dimensions.y * sizeof(float);
+    const std::streamsize time_slice_size = depth_slice_size * dimensions.z;
+    const std::streamsize channel_size = time_slice_size * dimensions.w;
+    const std::streamsize data_size = channel_size * 3;  // 3 = channel_count
 
     file.seekg(0, std::ios::end);
     const auto file_size = file.tellg();
-    const auto expected_file_size = time_slice_size * dimensions.w;
+    const auto expected_file_size = data_size + sizeof(glm::vec4);
     if (file_size != expected_file_size) {
         lava::log()->error("file size mismatch: expected {} bytes, got {} bytes", expected_file_size, file_size);
         return nullptr;
@@ -30,10 +35,13 @@ std::shared_ptr<DataSource> DataSource::open_raw_file(const std::filesystem::pat
         .filename = path.string(),
         .format = Format::Float32,
         .dimensions = dimensions,
-        .data_offset = 0,
+        .channel_count = 3,
+        .resolution = dimensions,
+        .data_offset = sizeof(glm::uvec4),
         .data_size = file_size,
         .time_slice_size = time_slice_size,
         .z_slice_size = depth_slice_size,
+        .channel_size = channel_size,
     });
     data_source->file.swap(file);
     return data_source;
@@ -107,10 +115,13 @@ std::shared_ptr<DataSource> DataSource::open_ktx_file(const std::filesystem::pat
         .filename = path.string(),
         .format = Format::BC6H,
         .dimensions = dimensions,
+        .channel_count = 1,
+        .resolution = dimensions,
         .data_offset = file.tellg(),
         .data_size = image_size,
         .time_slice_size = time_slice_size,
         .z_slice_size = z_size_in_bytes,
+        .channel_size = image_size,
     });
     dataset->file.swap(file);
     return dataset;

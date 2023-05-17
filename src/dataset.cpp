@@ -7,7 +7,7 @@
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan_core.h>
 
-bool Dataset::TimeSlice::create(lava::device_p device, const DataSource::Ptr& data, int t, VkSampler sampler) {
+bool Dataset::Image::create(lava::device_p device, const DataSource::Ptr& data, VkSampler sampler) {
     assert(this->image == VK_NULL_HANDLE);
     assert(this->view == VK_NULL_HANDLE);
     assert(this->allocation == VK_NULL_HANDLE);
@@ -27,15 +27,15 @@ bool Dataset::TimeSlice::create(lava::device_p device, const DataSource::Ptr& da
     //     }
 
     this->device = device;
-    const VkFormat format = data->format == DataSource::Format::BC6H ? VK_FORMAT_BC6H_SFLOAT_BLOCK : VK_FORMAT_R32G32B32A32_SFLOAT;
+    const VkFormat format = data->format == DataSource::Format::BC6H ? VK_FORMAT_BC6H_SFLOAT_BLOCK : VK_FORMAT_R32_SFLOAT;
 
-    TimeSlice time_slice;
+    Image time_slice;
     const VkImageCreateInfo image_create_info{
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
         .flags = 0,
         .imageType = VK_IMAGE_TYPE_3D,
         .format = format,
-        .extent = VkExtent3D {
+        .extent = VkExtent3D{
             .width = data->dimensions.x,
             .height = data->dimensions.y,
             .depth = data->dimensions.z,
@@ -57,11 +57,11 @@ bool Dataset::TimeSlice::create(lava::device_p device, const DataSource::Ptr& da
     if (vmaCreateImage(device->get_allocator()->get(), &image_create_info, &allocation_create_info, &this->image, &this->allocation, &allocation_info) != VK_SUCCESS) {
         lava::log()->error("failed to create image for dataset");
         return false;
-    } 
+    }
     // lava::log()->info("allocated memory for slice t={}: {} bytes", t, allocation_info.size);
     // this->allocator = device->get_allocator()->get();
 
-    const VkImageViewCreateInfo image_view_info {
+    const VkImageViewCreateInfo image_view_info{
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
         .image = this->image,
         .viewType = VK_IMAGE_VIEW_TYPE_3D,
@@ -84,7 +84,7 @@ bool Dataset::TimeSlice::create(lava::device_p device, const DataSource::Ptr& da
     return true;
 }
 
-Dataset::TimeSlice::~TimeSlice() {
+Dataset::Image::~Image() {
     if (this->device && this->image && this->allocation && this->view) {
         this->device->vkDestroyImageView(this->view);
         vmaDestroyImage(device->get_allocator()->get(), this->image, this->allocation);
@@ -127,7 +127,6 @@ bool Dataset::loaded() {
     return this->loading_state.read()->step == LoadingState::Step::FINISHED;
 }
 
-
 void Dataset::imgui() {
     this->data->imgui();
     auto loading_state = this->loading_state.read();
@@ -166,7 +165,7 @@ void Dataset::imgui() {
 void Dataset::load(lava::device_p device, Ptr dataset) {
     auto data = dataset->data;
 
-    const VkSamplerCreateInfo sampler_info {
+    const VkSamplerCreateInfo sampler_info{
         .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
         .magFilter = VK_FILTER_LINEAR,
         .minFilter = VK_FILTER_LINEAR,
@@ -209,26 +208,25 @@ void Dataset::load(lava::device_p device, Ptr dataset) {
 
     dataset->loading_state.write()->set_step(LoadingState::Step::READ_DATA);
     sw.reset();
-    data->read(dataset->staging->allocation_info.pMappedData);
+    data->read(dataset->staging->allocation_info.pMappedData); // TODO: add chunk size
     lava::log()->info("read data to staging buffer ({} ms)", sw.elapsed().count());
 
     dataset->loading_state.write()->set_step(LoadingState::Step::TEXTURE_ALLOCATION, data->dimensions.w);
     sw.reset();
-    std::vector<TimeSlice> time_slices(data->dimensions.w);
-    for (int t = 0; t < data->dimensions.w; ++t) {
-        if (!time_slices[t].create(device, data, t, dataset->sampler)) {
-            lava::log()->error("failed to allocate time slice t={}", t);
+    std::vector<Image> images(data->dimensions.w * data->channel_count);
+    for (auto& image : images) {
+        if (!image.create(device, data, dataset->sampler)) {
+            lava::log()->error("failed to allocate image");
             dataset->loading_state.write()->set_step(LoadingState::Step::ERROR);
             return;
         }
         dataset->loading_state.write()->advance_substep();
     }
-    lava::log()->info("allocated time slices ({} ms)", sw.elapsed().count());
-    dataset->time_slices = std::move(time_slices);
+    lava::log()->info("allocated images ({} ms)", sw.elapsed().count());
+    dataset->images = std::move(images);
 
     dataset->loading_state.write()->set_step(LoadingState::Step::TRANSFER);
 }
-
 
 bool Dataset::transfer_if_necessary(VkCommandBuffer command_buffer) {
     auto loading_state = this->loading_state.write();
@@ -236,79 +234,79 @@ bool Dataset::transfer_if_necessary(VkCommandBuffer command_buffer) {
         return false;
     }
 
-    for (int t = 0; t < data->dimensions.w; ++t) {
-        // Memory barrier to -> (VK_ACCESS_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
-        {
-            VkImageMemoryBarrier barrier{
-                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                .srcAccessMask = 0,
-                .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-                .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .image = time_slices[t].image,
-                .subresourceRange = VkImageSubresourceRange{
+    for (int c = 0; c < data->channel_count; ++c) {
+        for (int t = 0; t < data->dimensions.w; ++t) {
+            // Memory barrier to -> (VK_ACCESS_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+            {
+                VkImageMemoryBarrier barrier{
+                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                    .srcAccessMask = 0,
+                    .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                    .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                    .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .image = this->get_image(c, t).image,
+                    .subresourceRange = VkImageSubresourceRange{
+                        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                        .baseMipLevel = 0,
+                        .levelCount = 1,
+                        .baseArrayLayer = 0,
+                        .layerCount = 1,
+                    },
+                };
+                vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+            }
+
+            VkBufferImageCopy region = {
+                .bufferOffset = static_cast<VkDeviceSize>(data->channel_size * c + data->time_slice_size * t),
+                .bufferRowLength = 0,
+                .bufferImageHeight = 0,
+                .imageSubresource = VkImageSubresourceLayers{
                     .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                    .baseMipLevel = 0,
-                    .levelCount = 1,
+                    .mipLevel = 0,
                     .baseArrayLayer = 0,
                     .layerCount = 1,
                 },
-            };
-            vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-        }
-
-        VkBufferImageCopy region = {
-            .bufferOffset = static_cast<VkDeviceSize>(data->time_slice_size) * t,
-            .bufferRowLength = 0,
-            .bufferImageHeight = 0,
-            .imageSubresource = VkImageSubresourceLayers{
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .mipLevel = 0,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
-            },
-            .imageOffset = VkOffset3D{
-                .x = 0,
-                .y = 0,
-                .z = 0,
-            },
-            .imageExtent = VkExtent3D{
-                .width = data->dimensions.x,
-                .height = data->dimensions.y,
-                .depth = data->dimensions.z,
-            },
-        };
-
-        vkCmdCopyBufferToImage(command_buffer, this->staging->buffer, time_slices[t].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-
-        // Memory barrier (VK_ACCESS_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) -> (VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-        {
-            VkImageMemoryBarrier barrier{
-                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-                .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
-                .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .image = time_slices[t].image,
-                .subresourceRange = VkImageSubresourceRange{
-                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                    .baseMipLevel = 0,
-                    .levelCount = 1,
-                    .baseArrayLayer = 0,
-                    .layerCount = 1,
+                .imageOffset = VkOffset3D{
+                    .x = 0,
+                    .y = 0,
+                    .z = 0,
+                },
+                .imageExtent = VkExtent3D{
+                    .width = data->dimensions.x,
+                    .height = data->dimensions.y,
+                    .depth = data->dimensions.z,
                 },
             };
-            vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+            vkCmdCopyBufferToImage(command_buffer, this->staging->buffer, this->get_image(c, t).image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+            // Memory barrier (VK_ACCESS_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) -> (VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+            {
+                VkImageMemoryBarrier barrier{
+                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                    .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                    .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+                    .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .image = this->get_image(c, t).image,
+                    .subresourceRange = VkImageSubresourceRange{
+                        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                        .baseMipLevel = 0,
+                        .levelCount = 1,
+                        .baseArrayLayer = 0,
+                        .layerCount = 1,
+                    },
+                };
+                vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+            }
         }
     }
-
 
     loading_state->set_step(LoadingState::Step::FINISHED);
     lava::log()->info("Data transfered");
     return true;
 }
-

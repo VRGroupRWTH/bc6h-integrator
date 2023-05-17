@@ -18,18 +18,18 @@ struct Dataset {
     void destroy();
 
     DataSource::Ptr data;
-    struct TimeSlice {
-        TimeSlice() = default;
-        TimeSlice(const TimeSlice&) = delete;
-        TimeSlice(TimeSlice&& other) : device(other.device), image(other.image), allocation(other.allocation) {
+    struct Image {
+        Image() = default;
+        Image(const Image&) = delete;
+        Image(Image&& other) : device(other.device), image(other.image), allocation(other.allocation) {
             other.device = nullptr;
             other.image = VK_NULL_HANDLE;
             other.allocation = VK_NULL_HANDLE;
         }
-        TimeSlice& operator=(const TimeSlice&) = delete;
-        ~TimeSlice();
+        Image& operator=(const Image&) = delete;
+        ~Image();
 
-        bool create(lava::device_p device, const DataSource::Ptr& data, int t, VkSampler sampler);
+        bool create(lava::device_p device, const DataSource::Ptr& data, VkSampler sampler);
 
         lava::device_p device = nullptr;
         VkImage image = VK_NULL_HANDLE;
@@ -37,8 +37,11 @@ struct Dataset {
         VmaAllocation allocation = VK_NULL_HANDLE;
         VkDescriptorImageInfo image_info;
     };
-    std::vector<TimeSlice> time_slices;
+    std::vector<Image> images;
     std::thread loading_thread;
+    Image& get_image(unsigned channel, unsigned t) {
+        return this->images[channel * this->data->dimensions.w + t];
+    }
 
     lava::device_p device = nullptr;
     VkSampler sampler = VK_NULL_HANDLE;
