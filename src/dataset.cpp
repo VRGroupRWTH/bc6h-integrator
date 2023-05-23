@@ -7,6 +7,17 @@
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan_core.h>
 
+VkFormat get_vulkan_format(DataSource::Format format) {
+    switch (format) {
+        case DataSource::Format::Float16:
+            return VK_FORMAT_R16_SFLOAT;
+        case DataSource::Format::Float32:
+            return VK_FORMAT_R32_SFLOAT;
+        case DataSource::Format::BC6H:
+            return VK_FORMAT_BC6H_SFLOAT_BLOCK;
+    }
+}
+
 bool Dataset::Image::create(lava::device_p device, const DataSource::Ptr& data, VkSampler sampler) {
     assert(this->image == VK_NULL_HANDLE);
     assert(this->view == VK_NULL_HANDLE);
@@ -27,7 +38,7 @@ bool Dataset::Image::create(lava::device_p device, const DataSource::Ptr& data, 
     //     }
 
     this->device = device;
-    const VkFormat format = data->format == DataSource::Format::BC6H ? VK_FORMAT_BC6H_SFLOAT_BLOCK : VK_FORMAT_R32_SFLOAT;
+    const VkFormat format = get_vulkan_format(data->format);
 
     Image time_slice;
     const VkImageCreateInfo image_create_info{

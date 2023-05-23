@@ -12,6 +12,7 @@ struct DataSource {
     using Ptr = std::shared_ptr<DataSource>;
 
     enum class Format {
+        Float16,
         Float32,
         BC6H,
     };
