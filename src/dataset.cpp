@@ -1,4 +1,5 @@
 #include "dataset.hpp"
+#include "queues.hpp"
 #include <imgui.h>
 #include <liblava/base/physical_device.hpp>
 #include <liblava/core/time.hpp>
@@ -16,6 +17,7 @@ VkFormat get_vulkan_format(DataSource::Format format) {
         case DataSource::Format::BC6H:
             return VK_FORMAT_BC6H_SFLOAT_BLOCK;
     }
+    assert(false && "Invalid format");
 }
 
 bool Dataset::Image::create(lava::device_p device, const DataSource::Ptr& data, VkSampler sampler) {
@@ -40,6 +42,13 @@ bool Dataset::Image::create(lava::device_p device, const DataSource::Ptr& data, 
     this->device = device;
     const VkFormat format = get_vulkan_format(data->format);
 
+    const auto& queues = this->device->get_queues();
+    std::array<std::uint32_t, 3> family_indices = {
+        queues[queue_indices::GRAPHICS].family,
+        queues[queue_indices::COMPUTE].family,
+        queues[queue_indices::TRANSFER].family,
+    };
+
     Image time_slice;
     const VkImageCreateInfo image_create_info{
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
@@ -56,7 +65,9 @@ bool Dataset::Image::create(lava::device_p device, const DataSource::Ptr& data, 
         .samples = VK_SAMPLE_COUNT_1_BIT,
         .tiling = VK_IMAGE_TILING_OPTIMAL,
         .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .sharingMode = VK_SHARING_MODE_CONCURRENT,
+        .queueFamilyIndexCount = family_indices.size(),
+        .pQueueFamilyIndices = family_indices.data(),
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
     };
     const VmaAllocationCreateInfo allocation_create_info{
@@ -102,35 +113,64 @@ Dataset::Image::~Image() {
     }
 }
 
-Dataset::Ptr Dataset::create(lava::device_p device, DataSource::Ptr data) {
-    if (data == nullptr) {
-        lava::log()->error("failed to create dataset: invalid data source");
-        return nullptr;
-    }
+bool Dataset::create(lava::device_p device) {
+    this->device = device;
+    const VkSamplerCreateInfo sampler_info{
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .magFilter = VK_FILTER_LINEAR,
+        .minFilter = VK_FILTER_LINEAR,
+        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+        .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+    };
+    device->vkCreateSampler(&sampler_info, &this->sampler);
 
-    auto dataset = std::make_shared<Dataset>(data);
-    dataset->device = device;
-    dataset->loading_thread = std::thread(Dataset::load, device, dataset);
-    return dataset;
+    // this->staging.resize(2);
+    // for (auto& staging_buffer : this->staging) {
+    //     if (!staging_buffer.create(device, data)) {
+    //         return false;
+    //     }
+    // }
+    this->images.reserve(data->dimensions.w * data->channel_count);
+    this->loading_thread = std::thread(&Dataset::load, this, 1);
+    // this->staging.emplace(StagingBuffer{.allocator = device->get_allocator()->get()});
+
+    // dataset->loading_state.write()->set_step(LoadingState::Step::READ_DATA);
+    // sw.reset();
+    // lava::log()->info("read data to staging buffer ({} ms)", sw.elapsed().count());
+
+    // dataset->loading_state.write()->set_step(LoadingState::Step::TEXTURE_ALLOCATION, data->dimensions.w);
+    // sw.reset();
+    // std::vector<Image> images(data->dimensions.w * data->channel_count);
+    // for (auto& image : images) {
+    //     dataset->loading_state.write()->advance_substep();
+    // }
+    // lava::log()->info("allocated images ({} ms)", sw.elapsed().count());
+    // dataset->images = std::move(images);
+
+    // dataset->loading_state.write()->set_step(LoadingState::Step::TRANSFER);
+
+    return true;
 }
 
 void Dataset::destroy() {
+    this->loading_thread.join();
     if (this->sampler != VK_NULL_HANDLE) {
         assert(this->device);
         this->device->vkDestroySampler(this->sampler);
         this->sampler = VK_NULL_HANDLE;
     }
-    this->loading_thread.join();
 }
 
 bool Dataset::is_loading() {
     switch (this->loading_state.read()->step) {
         case LoadingState::Step::FINISHED:
         case LoadingState::Step::ERROR:
-            return true;
+            return false;
 
         default:
-            return false;
+            return true;
     }
 }
 
@@ -154,99 +194,164 @@ void Dataset::imgui() {
                 ImGui::Text("Starting");
                 break;
 
-            case LoadingState::Step::STAGING_BUFFER_ALLOCATION:
-                ImGui::Text("Allocating staging buffer");
+            case LoadingState::Step::LOAD_SLICE:
+                ImGui::Text("Loading slices");
                 break;
 
-            case LoadingState::Step::READ_DATA:
-                ImGui::Text("Read data to staging buffer");
+            case LoadingState::Step::FINISHED:
+                ImGui::Text("Finished");
                 break;
 
-            case LoadingState::Step::TEXTURE_ALLOCATION:
-                ImGui::Text("Allocating textures");
-                break;
-
-            case LoadingState::Step::TRANSFER:
-                ImGui::Text("Transfer staging buffer to textures");
+            case LoadingState::Step::ERROR:
+                ImGui::Text("Error");
                 break;
         }
     }
+
+    ImGui::Text("%f s", this->loading_time.load().count() / 1000.0);
 }
 
-void Dataset::load(lava::device_p device, Ptr dataset) {
-    auto data = dataset->data;
+void Dataset::load(std::size_t staging_buffer_count) {
+    struct StagingBuffer {
+        lava::device_p device;
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VmaAllocation allocation = VK_NULL_HANDLE;
+        VmaAllocationInfo allocation_info;
+        VmaAllocator allocator = VK_NULL_HANDLE;
 
-    const VkSamplerCreateInfo sampler_info{
-        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-        .magFilter = VK_FILTER_LINEAR,
-        .minFilter = VK_FILTER_LINEAR,
-        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
-        .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-        .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-        .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        bool create(lava::device_p device, VkDeviceSize size) {
+            this->device = device;
+            this->allocator = device->alloc();
+
+            const VkBufferCreateInfo staging_buffer_create_info{
+                .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                .flags = 0,
+                .size = size,
+                .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            };
+            const VmaAllocationCreateInfo staging_buffer_allocation_create_info{
+                .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+                .usage = VMA_MEMORY_USAGE_AUTO,
+            };
+
+            lava::timer sw;
+            if (vmaCreateBufferWithAlignment(
+                    this->allocator,
+                    &staging_buffer_create_info,
+                    &staging_buffer_allocation_create_info,
+                    1,
+                    &this->buffer,
+                    &this->allocation,
+                    &this->allocation_info
+                ) != VK_SUCCESS) {
+                lava::log()->error("failed to create staging buffer");
+                return false;
+            }
+            lava::log()->info("allocate staging buffer for data upload ({} ms)", sw.elapsed().count());
+
+            return true;
+        }
+
+        ~StagingBuffer() {
+            if (buffer && allocation && allocator) {
+                vmaDestroyBuffer(this->allocator, this->buffer, this->allocation);
+            }
+        }
     };
-    device->vkCreateSampler(&sampler_info, &dataset->sampler);
 
-    dataset->staging.emplace(StagingBuffer{.allocator = device->get_allocator()->get()});
-    const VkBufferCreateInfo staging_buffer_create_info{
-        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        .flags = 0,
-        .size = static_cast<VkDeviceSize>(data->data_size),
-        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    this->loading_state.write()->set_step(LoadingState::Step::STARTING);
+    lava::timer loading_timer;
+    this->loading_time.exchange(loading_timer.elapsed());
+
+    std::vector<StagingBuffer> staging_buffers(staging_buffer_count);
+    lava::VkCommandBuffers staging_command_buffers(staging_buffer_count);
+    lava::VkFences staging_fences(staging_buffer_count);
+
+    auto queue = this->device->queues()[queue_indices::TRANSFER];
+    VkCommandPoolCreateInfo pool_info{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+        .queueFamilyIndex = queue.family,
     };
-    const VmaAllocationCreateInfo staging_buffer_allocation_create_info{
-        .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
-        .usage = VMA_MEMORY_USAGE_AUTO,
-    };
 
-    dataset->loading_state.write()->set_step(LoadingState::Step::STAGING_BUFFER_ALLOCATION);
-    lava::timer sw;
-    if (vmaCreateBufferWithAlignment(
-            dataset->staging->allocator,
-            &staging_buffer_create_info,
-            &staging_buffer_allocation_create_info,
-            1,
-            &dataset->staging->buffer,
-            &dataset->staging->allocation,
-            &dataset->staging->allocation_info
-        ) != VK_SUCCESS) {
-        lava::log()->error("failed to create staging buffer for data upload");
-        dataset->loading_state.write()->set_step(LoadingState::Step::ERROR);
-        return;
-    }
-    lava::log()->info("allocate staging buffer for data upload ({} ms)", sw.elapsed().count());
-
-    dataset->loading_state.write()->set_step(LoadingState::Step::READ_DATA);
-    sw.reset();
-    data->read(dataset->staging->allocation_info.pMappedData); // TODO: add chunk size
-    lava::log()->info("read data to staging buffer ({} ms)", sw.elapsed().count());
-
-    dataset->loading_state.write()->set_step(LoadingState::Step::TEXTURE_ALLOCATION, data->dimensions.w);
-    sw.reset();
-    std::vector<Image> images(data->dimensions.w * data->channel_count);
-    for (auto& image : images) {
-        if (!image.create(device, data, dataset->sampler)) {
-            lava::log()->error("failed to allocate image");
-            dataset->loading_state.write()->set_step(LoadingState::Step::ERROR);
+    for (auto& buffer : staging_buffers) {
+        if (!buffer.create(this->device, this->data->time_slice_size)) {
+            lava::log()->error("failed to create staging buffer");
+            this->loading_state.write()->set_step(LoadingState::Step::ERROR);
             return;
         }
-        dataset->loading_state.write()->advance_substep();
-    }
-    lava::log()->info("allocated images ({} ms)", sw.elapsed().count());
-    dataset->images = std::move(images);
-
-    dataset->loading_state.write()->set_step(LoadingState::Step::TRANSFER);
-}
-
-bool Dataset::transfer_if_necessary(VkCommandBuffer command_buffer) {
-    auto loading_state = this->loading_state.write();
-    if (loading_state->step != LoadingState::Step::TRANSFER) {
-        return false;
     }
 
-    for (int c = 0; c < data->channel_count; ++c) {
-        for (int t = 0; t < data->dimensions.w; ++t) {
+    VkCommandPool command_pool = VK_NULL_HANDLE;
+    if (!this->device->vkCreateCommandPool(&pool_info, &command_pool)) {
+        lava::log()->error("failed to create command pool for data staging");
+        this->loading_state.write()->set_step(LoadingState::Step::ERROR);
+        return;
+    }
+
+    if (!this->device->vkAllocateCommandBuffers(command_pool, staging_buffer_count, staging_command_buffers.data())) {
+        lava::log()->error("failed to create command buffers for data staging");
+        this->loading_state.write()->set_step(LoadingState::Step::ERROR);
+        return;
+    }
+
+    for (auto& fence : staging_fences) {
+        VkFenceCreateInfo fence_info{
+            .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            .flags = VK_FENCE_CREATE_SIGNALED_BIT,
+        };
+        if (!this->device->vkCreateFence(&fence_info, &fence)) {
+            lava::log()->error("failed to create fence for data staging");
+            this->loading_state.write()->set_step(LoadingState::Step::ERROR);
+            return;
+        }
+    }
+
+    this->loading_state.write()->set_step(LoadingState::Step::LOAD_SLICE, this->data->dimensions.w * this->data->channel_count);
+
+    while (this->images.size() < this->data->dimensions.w * this->data->channel_count) {
+        for (std::size_t i = 0; i < staging_buffer_count; ++i) {
+            auto& buffer = staging_buffers[i];
+            auto& fence = staging_fences[i];
+            auto& command_buffer = staging_command_buffers[i];
+
+            if (this->device->vkWaitForFences(1, &fence, true, 0).value != VK_SUCCESS) {
+                continue;
+            }
+
+            const std::size_t image_index = this->images.size();
+            const std::size_t channel_index = image_index / this->data->dimensions[3];
+            const std::size_t time_slice_index = image_index % this->data->dimensions[3];
+            lava::log()->debug("load slice {} of channel {}", time_slice_index, channel_index);
+
+            lava::timer sw;
+            this->data->read_time_slice(channel_index, time_slice_index, buffer.allocation_info.pMappedData);
+            lava::log()->info("data read ({} ms)", sw.elapsed().count());
+
+            sw.reset();
+            auto& image = this->images.emplace_back();
+            if (!image.create(device, data, this->sampler)) {
+                lava::log()->error("failed to allocate image");
+                this->loading_state.write()->set_step(LoadingState::Step::ERROR);
+                return;
+            }
+            lava::log()->info("image allocation ({} ms)", sw.elapsed().count());
+
+            VkCommandBufferBeginInfo begin_info{
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            };
+            if (vkBeginCommandBuffer(command_buffer, &begin_info) != VK_SUCCESS) {
+                lava::log()->error("failed to begin command buffer");
+                this->loading_state.write()->set_step(LoadingState::Step::ERROR);
+                return;
+            }
+            if (this->device->vkResetFences(1, &fence).value != VK_SUCCESS) {
+                lava::log()->error("failed to reset fence");
+                this->loading_state.write()->set_step(LoadingState::Step::ERROR);
+                return;
+            }
+
             // Memory barrier to -> (VK_ACCESS_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
             {
                 VkImageMemoryBarrier barrier{
@@ -257,7 +362,7 @@ bool Dataset::transfer_if_necessary(VkCommandBuffer command_buffer) {
                     .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                     .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                     .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .image = this->get_image(c, t).image,
+                    .image = image.image,
                     .subresourceRange = VkImageSubresourceRange{
                         .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                         .baseMipLevel = 0,
@@ -270,7 +375,7 @@ bool Dataset::transfer_if_necessary(VkCommandBuffer command_buffer) {
             }
 
             VkBufferImageCopy region = {
-                .bufferOffset = static_cast<VkDeviceSize>(data->channel_size * c + data->time_slice_size * t),
+                .bufferOffset = 0,
                 .bufferRowLength = 0,
                 .bufferImageHeight = 0,
                 .imageSubresource = VkImageSubresourceLayers{
@@ -291,33 +396,113 @@ bool Dataset::transfer_if_necessary(VkCommandBuffer command_buffer) {
                 },
             };
 
-            vkCmdCopyBufferToImage(command_buffer, this->staging->buffer, this->get_image(c, t).image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            vkCmdCopyBufferToImage(command_buffer, buffer.buffer, image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
             // Memory barrier (VK_ACCESS_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) -> (VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-            {
-                VkImageMemoryBarrier barrier{
-                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                    .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-                    .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
-                    .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .image = this->get_image(c, t).image,
-                    .subresourceRange = VkImageSubresourceRange{
-                        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                        .baseMipLevel = 0,
-                        .levelCount = 1,
-                        .baseArrayLayer = 0,
-                        .layerCount = 1,
-                    },
-                };
-                vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+            // {
+            //     VkImageMemoryBarrier barrier{
+            //         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            //         .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            //         .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+            //         .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            //         .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            //         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            //         .dstQueueFamilyIndex = this->device->get_queues()[0].family,
+            //         .image = image.image,
+            //         .subresourceRange = VkImageSubresourceRange{
+            //             .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            //             .baseMipLevel = 0,
+            //             .levelCount = 1,
+            //             .baseArrayLayer = 0,
+            //             .layerCount = 1,
+            //         },
+            //     };
+            //     vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+            // }
+            //
+            //
+            if (vkEndCommandBuffer(command_buffer) != VK_SUCCESS) {
+                lava::log()->error("failed to end command buffer");
+                this->loading_state.write()->set_step(LoadingState::Step::ERROR);
+                return;
+            }
+
+            VkSubmitInfo submit_info{
+                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                .commandBufferCount = 1,
+                .pCommandBuffers = &command_buffer};
+            if (!this->device->vkQueueSubmit(queue.vk_queue, 1, &submit_info, fence)) {
+                lava::log()->error("failed to submit command buffer");
+                this->loading_state.write()->set_step(LoadingState::Step::ERROR);
+                return;
+            }
+
+            this->loading_state.write()->advance_substep();
+            this->loading_time.exchange(loading_timer.elapsed());
+        }
+
+        {
+            VkResult result;
+            do {
+                result = this->device->vkWaitForFences(staging_fences.size(), staging_fences.data(), false, 1000 * 1000).value;
+            } while (result == VK_TIMEOUT);
+            if (result != VK_SUCCESS) {
+                lava::log()->error("failed to wait for staging fences");
+                this->loading_state.write()->set_step(LoadingState::Step::ERROR);
+                return;
             }
         }
     }
 
-    loading_state->set_step(LoadingState::Step::FINISHED);
-    lava::log()->info("Data transfered");
-    return true;
+    {
+        VkResult result;
+        do {
+            result = this->device->vkWaitForFences(staging_fences.size(), staging_fences.data(), true, 1000 * 1000).value;
+        } while (result == VK_TIMEOUT);
+        if (result != VK_SUCCESS) {
+            lava::log()->error("failed to wait for staging fences");
+            this->loading_state.write()->set_step(LoadingState::Step::ERROR);
+            return;
+        }
+    }
+
+    this->device->vkFreeCommandBuffers(command_pool, staging_command_buffers.size(), staging_command_buffers.data());
+    this->device->vkDestroyCommandPool(command_pool);
+    for (auto& fence : staging_fences) {
+        this->device->vkDestroyFence(fence);
+    }
+
+    this->loading_time.exchange(loading_timer.elapsed());
+    lava::log()->info("load dataset ({} s)", this->loading_time.load().count() / 1000.0);
+    this->loading_state.write()->set_step(LoadingState::Step::FINISHED);
+}
+
+void Dataset::transition_images(VkCommandBuffer command_buffer) {
+    auto graphics_queue = this->device->queues()[queue_indices::GRAPHICS];
+    auto transfer_queue = this->device->queues()[queue_indices::TRANSFER];
+
+    for (auto& image : this->images) {
+        {
+            VkImageMemoryBarrier barrier{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = image.image,
+                .subresourceRange = VkImageSubresourceRange{
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+            };
+            vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+        }
+    }
+
+    this->transitioned = true;
 }

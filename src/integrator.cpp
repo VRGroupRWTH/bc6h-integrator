@@ -1,4 +1,5 @@
 #include "integrator.hpp"
+#include "queues.hpp"
 #include "shaders.hpp"
 #include "time_slices.hpp"
 #include <array>
@@ -27,13 +28,8 @@ constexpr std::uint32_t WORK_GROUP_SIZE_Z_CONSTANT_ID = 2;
 constexpr std::uint32_t TIME_STEPS_CONSTANT_ID = 3;
 
 bool Integrator::create(lava::app& app) {
-    const auto queues = app.device->compute_queues();
-    const auto compute_queue = std::find_if(queues.begin(), queues.end(), [](auto q) { return q.priority == 1.0; });
-    if (compute_queue == queues.end()) {
-        lava::log()->error("failed to find appropriate compute queue");
-        return false;
-    }
-    this->compute_queue = *compute_queue;
+    const auto& queues = app.device->queues();
+    this->compute_queue = queues[queue_indices::COMPUTE];
     this->device = app.device;
     this->app = &app;
 
@@ -412,7 +408,7 @@ bool Integrator::Integration::create_buffers(glm::uvec3 seed_spawn, std::uint32_
     const std::size_t buffer_size = seed_count * integration_steps * sizeof(glm::vec4);
 
     const std::array<std::uint32_t, 2> queue_family_indices = {
-        device->get_graphics_queue().family,
+        device->get_queues()[queue_indices::GRAPHICS].family,
         compute_queue.family,
     };
 
@@ -527,7 +523,11 @@ bool Integrator::integrate() {
     this->destroy_integration();
     this->integration.emplace();
     lava::log()->debug("create buffers");
+    lava::log()->flush();
+
+    lava::timer sw;
     this->integration->create_buffers(this->seed_spawn, this->integration_steps, this->device, this->compute_queue);
+    lava::log()->debug("integration buffers created ({} ms)", sw.elapsed().count());
     this->integration->update_descriptor_set(this->device, this->descriptor_set);
     this->write_dataset_to_descriptor();
 
@@ -561,6 +561,7 @@ bool Integrator::integrate() {
         .first_step = 0,
         .step_count = this->integration_steps,
     };
+    sw.reset();
     lava::log()->debug("start integration");
     device->call().vkCmdResetQueryPool(this->integration->command_buffer, this->query_pool, 0, 2);
 
@@ -590,6 +591,7 @@ bool Integrator::integrate() {
         step_count += c.step_count;
     }
     device->call().vkCmdWriteTimestamp(this->integration->command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, this->query_pool, 1);
+    lava::log()->debug("integration dispatched ({} ms)", sw.elapsed().count());
 
     if (vkEndCommandBuffer(this->integration->command_buffer) != VK_SUCCESS) {
         lava::log()->error("failed to end command buffer");

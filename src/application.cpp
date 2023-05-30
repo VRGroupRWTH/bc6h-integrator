@@ -14,8 +14,9 @@ bool Application::setup() {
         device_param.features.wideLines = true;
         device_param.features.fillModeNonSolid = true;
         device_param.features.multiDrawIndirect = true;
-        device_param.queue_family_infos[0].queues[0].priority = 0.5;
+        // device_param.queue_family_infos[0].queues[0].priority = 1.0;
         device_param.add_queue(VK_QUEUE_COMPUTE_BIT, 1.0);
+        device_param.add_queue(VK_QUEUE_TRANSFER_BIT, 1.0);
     };
 
     if (!this->engine.setup()) {
@@ -56,8 +57,8 @@ bool Application::setup() {
     };
 
     this->engine.on_process = [this](VkCommandBuffer command_buffer, lava::index frame) {
-        if (this->dataset) {
-            this->dataset->transfer_if_necessary(command_buffer);
+        if (this->dataset && this->dataset->loaded() && !this->dataset->transitioned) {
+            this->dataset->transition_images(command_buffer);
         }
     };
 
@@ -87,9 +88,9 @@ bool Application::setup() {
 
 void Application::load_dataset(const std::filesystem::path& path) {
     if (path.extension() == ".raw") {
-        this->dataset = Dataset::create(this->engine.device, DataSource::open_raw_file(path));
+        this->dataset = Dataset::make(this->engine.device, DataSource::open_raw_file(path));
     } else if (path.extension() == ".ktx") {
-        this->dataset = Dataset::create(this->engine.device, DataSource::open_ktx_file(path));
+        this->dataset = Dataset::make(this->engine.device, DataSource::open_ktx_file(path));
     } else {
         lava::log()->warn("Unknown extension: {}", path.extension().string());
         return;

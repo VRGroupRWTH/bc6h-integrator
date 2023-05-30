@@ -20,9 +20,9 @@ struct DataSource {
     static Ptr open_raw_file(const std::filesystem::path& path);
     static Ptr open_ktx_file(const std::filesystem::path& path);
 
-    std::streampos get_offset(int z, int t);
+    // std::streampos get_offset(int z, int t);
     void read(void* buffer);
-    void read_z_slice(int z, int t, void* out);
+    void read_time_slice(int c, int t, void* buffer);
     void imgui();
     glm::vec4 dimensions_in_meters_and_seconds() const { return glm::vec4(this->dimensions) / this->resolution; }
     glm::vec3 dimensions_in_meters() const { return glm::vec3(this->dimensions) / glm::vec3(this->resolution); }

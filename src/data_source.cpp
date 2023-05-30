@@ -157,17 +157,14 @@ void DataSource::imgui() {
     }
 }
 
-std::streampos DataSource::get_offset(int z, int t) {
-    return this->data_offset + t * this->time_slice_size + z * this->z_slice_size;
-}
-
 void DataSource::read(void* buffer) {
     assert(buffer);
     this->file.seekg(this->data_offset);
     this->file.read(reinterpret_cast<char*>(buffer), this->data_size);
 }
 
-void DataSource::read_z_slice(int z, int t, void* out) {
-    this->file.seekg(get_offset(z, t));
-    this->file.read(reinterpret_cast<char*>(out), this->z_slice_size);
+void DataSource::read_time_slice(int c, int t, void* buffer) {
+    assert(buffer);
+    this->file.seekg(this->data_offset + c * this->channel_size + t * this->time_slice_size);
+    this->file.read(reinterpret_cast<char*>(buffer), this->time_slice_size);
 }
