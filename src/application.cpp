@@ -14,8 +14,9 @@ bool Application::setup() {
         device_param.features.wideLines = true;
         device_param.features.fillModeNonSolid = true;
         device_param.features.multiDrawIndirect = true;
-        device_param.queue_family_infos[0].queues[0].priority = 0.5;
+        // device_param.queue_family_infos[0].queues[0].priority = 1.0;
         device_param.add_queue(VK_QUEUE_COMPUTE_BIT, 1.0);
+        device_param.add_queue(VK_QUEUE_TRANSFER_BIT, 1.0);
     };
 
     if (!this->engine.setup()) {
@@ -56,8 +57,8 @@ bool Application::setup() {
     };
 
     this->engine.on_process = [this](VkCommandBuffer command_buffer, lava::index frame) {
-        if (this->dataset) {
-            this->dataset->transfer_if_necessary(command_buffer);
+        if (this->dataset && this->dataset->loaded() && !this->dataset->transitioned) {
+            this->dataset->transition_images(command_buffer);
         }
     };
 
@@ -80,12 +81,20 @@ bool Application::setup() {
         return false;
     }
 
+    this->engine.camera.position = glm::vec3(0, 0, 2);
+
     return true;
 }
 
 void Application::load_dataset(const std::filesystem::path& path) {
-    // state->dataset = Dataset::create(device, DataSource::open_raw_file("/home/so225523/Data/100x100x100x100.raw", glm::uvec4(100, 100, 100, 100)));
-    this->dataset = Dataset::create(this->engine.device, DataSource::open_ktx_file(path));
+    if (path.extension() == ".raw") {
+        this->dataset = Dataset::make(this->engine.device, DataSource::open_raw_file(path));
+    } else if (path.extension() == ".ktx") {
+        this->dataset = Dataset::make(this->engine.device, DataSource::open_ktx_file(path));
+    } else {
+        lava::log()->warn("Unknown extension: {}", path.extension().string());
+        return;
+    }
     this->view->set_dataset(this->dataset);
     this->integrator->set_dataset(this->dataset);
 }
@@ -123,6 +132,7 @@ void Application::imgui() {
             ImGui::DragFloat3("Rotation", glm::value_ptr(this->engine.camera.rotation), 0.01f);
             if (ImGui::Button("Reset")) {
                 this->engine.camera.reset();
+                this->engine.camera.position = glm::vec3(0, 0, 2);
             }
         }
         if (ImGui::CollapsingHeader("Dataset", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -147,6 +157,8 @@ void Application::imgui() {
             }
         }
     }
+    ImGui::Separator();
+    ImGui::Text("FPS: %f", ImGui::GetIO().Framerate);
     ImGui::End();
 
     this->file_dialog.Display();

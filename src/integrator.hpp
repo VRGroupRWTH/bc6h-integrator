@@ -13,6 +13,9 @@ class Integrator {
 
     static Ptr make() { return std::make_shared<Integrator>(); }
 
+    Integrator() = default;
+    ~Integrator() { this->destroy(); }
+
     void render(VkCommandBuffer command_buffer);
     void imgui();
     void set_dataset(Dataset::Ptr dataset);
@@ -29,8 +32,12 @@ class Integrator {
     bool create_progress_buffer();
     bool create_command_pool();
     bool create_query_pool();
+
     bool create_descriptor();
-    bool create_compute_pipeline();
+    void destroy_descriptor();
+
+    bool create_integration_pipeline();
+    void destroy_integration_pipeline();
 
     void write_dataset_to_descriptor();
     void destroy_integration();
@@ -71,8 +78,9 @@ class Integrator {
     VkCommandPool command_pool = VK_NULL_HANDLE;
     VkQueryPool query_pool = VK_NULL_HANDLE;
 
-    lava::pipeline_layout::ptr spawn_seeds_pipeline_layout;
-    lava::compute_pipeline::ptr spawn_seeds_pipeline;
+    lava::pipeline_layout::ptr integration_pipeline_layout;
+    lava::compute_pipeline::ptr integration_pipeline;
+    bool recreate_integration_pipeline = true;
 
     // Rendering
     lava::pipeline_layout::ptr render_pipeline_layout;
@@ -81,7 +89,10 @@ class Integrator {
     glm::vec4 line_color = glm::vec4(0.0, 0.0, 0.0, 1.0);
 
     // Integration settings
-    glm::uvec3 seed_spawn = {10, 10, 10};
-    unsigned int integration_steps = 100;
+    glm::uvec3 work_group_size = {8, 1, 1};
+    glm::uvec3 seed_spawn = {20, 20, 20};
+    float delta_time = 0.0001;
+    unsigned int integration_steps = 10000;
+    unsigned int batch_size = 100;
     bool should_integrate = false;
 };

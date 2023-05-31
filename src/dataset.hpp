@@ -1,35 +1,46 @@
 #pragma once
 
 #include "data_source.hpp"
+#include <liblava/base/base.hpp>
 #include <liblava/base/device.hpp>
+#include <liblava/core/time.hpp>
 #include <memory>
 #include <optional>
+#include <sync/rwlock.hpp>
 #include <thread>
 #include <vulkan/vulkan_core.h>
-#include <sync/rwlock.hpp>
 
 struct Dataset {
     using Ptr = std::shared_ptr<Dataset>;
 
-    Dataset(DataSource::Ptr data) : data(data), loading_state(LoadingState()) {}
+    Dataset(DataSource::Ptr data) : data(std::move(data)), loading_state(LoadingState()) {}
     ~Dataset() { destroy(); }
 
-    static Ptr create(lava::device_p device, DataSource::Ptr data);
+    static Ptr make(lava::device_p device, DataSource::Ptr data) {
+        auto dataset = std::make_shared<Dataset>(data);
+
+        if (!dataset->create(device)) {
+            return nullptr;
+        }
+        return dataset;
+    }
+
+    bool create(lava::device_p device);
     void destroy();
 
     DataSource::Ptr data;
-    struct TimeSlice {
-        TimeSlice() = default;
-        TimeSlice(const TimeSlice&) = delete;
-        TimeSlice(TimeSlice&& other) : device(other.device), image(other.image), allocation(other.allocation) {
+    struct Image {
+        Image() = default;
+        Image(const Image&) = delete;
+        Image(Image&& other) : device(other.device), image(other.image), allocation(other.allocation) {
             other.device = nullptr;
             other.image = VK_NULL_HANDLE;
             other.allocation = VK_NULL_HANDLE;
         }
-        TimeSlice& operator=(const TimeSlice&) = delete;
-        ~TimeSlice();
+        Image& operator=(const Image&) = delete;
+        ~Image();
 
-        bool create(lava::device_p device, const DataSource::Ptr& data, int t, VkSampler sampler);
+        bool create(lava::device_p device, const DataSource::Ptr& data, VkSampler sampler);
 
         lava::device_p device = nullptr;
         VkImage image = VK_NULL_HANDLE;
@@ -37,33 +48,18 @@ struct Dataset {
         VmaAllocation allocation = VK_NULL_HANDLE;
         VkDescriptorImageInfo image_info;
     };
-    std::vector<TimeSlice> time_slices;
-    std::thread loading_thread;
+    std::vector<Image> images;
+    Image& get_image(unsigned channel, unsigned t) {
+        return this->images[channel * this->data->dimensions.w + t];
+    }
 
     lava::device_p device = nullptr;
     VkSampler sampler = VK_NULL_HANDLE;
 
-    struct StagingBuffer {
-        VkBuffer buffer = VK_NULL_HANDLE;
-        VmaAllocation allocation = VK_NULL_HANDLE;
-        VmaAllocationInfo allocation_info;
-        VmaAllocator allocator;
-
-        ~StagingBuffer() {
-            if (buffer && allocation && allocator) {
-                vmaDestroyBuffer(this->allocator, this->buffer, this->allocation);
-            }
-        }
-    };
-    std::optional<StagingBuffer> staging;
-
     struct LoadingState {
         enum class Step {
             STARTING,
-            STAGING_BUFFER_ALLOCATION,
-            READ_DATA,
-            TEXTURE_ALLOCATION,
-            TRANSFER,
+            LOAD_SLICE,
             FINISHED,
             ERROR,
         };
@@ -81,11 +77,14 @@ struct Dataset {
         }
     };
     cppsync::read_write_lock<LoadingState> loading_state;
+    std::thread loading_thread;
+    std::atomic<lava::ms> loading_time;
+    void load(std::size_t staging_buffer_count);
+
+    bool transitioned = false;
+    void transition_images(VkCommandBuffer command_buffer);
 
     bool is_loading();
     bool loaded();
     void imgui();
-    bool transfer_if_necessary(VkCommandBuffer command_buffer);
-
-    static void load(lava::device_p device, Ptr dataset);
 };

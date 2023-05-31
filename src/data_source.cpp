@@ -5,7 +5,7 @@
 #include <liblava/util/log.hpp>
 #include <spdlog/spdlog.h>
 
-std::shared_ptr<DataSource> DataSource::open_raw_file(const std::filesystem::path& path, glm::uvec4 dimensions) {
+std::shared_ptr<DataSource> DataSource::open_raw_file(const std::filesystem::path& path) {
     std::ifstream file(path, std::ios::binary);
 
     if (!file) {
@@ -13,28 +13,56 @@ std::shared_ptr<DataSource> DataSource::open_raw_file(const std::filesystem::pat
         return nullptr;
     }
 
-    const unsigned depth_slice_size = dimensions.x * dimensions.y * sizeof(float) * 4; // 4 floats per entry
-    const unsigned time_slice_size = depth_slice_size * dimensions.z;
+    glm::uvec4 dimensions;
+    file.read(reinterpret_cast<char*>(glm::value_ptr(dimensions)), sizeof(dimensions));
+
+    const std::streamsize depth_slice_size_f32 = dimensions.x * dimensions.y * sizeof(float);
+    const std::streamsize time_slice_size_f32 = depth_slice_size_f32 * dimensions.z;
+    const std::streamsize channel_size_f32 = time_slice_size_f32 * dimensions.w;
+    const std::streamsize data_size_f32 = channel_size_f32 * 3; // 3 = channel_count
+    const auto expected_file_size_f32 = data_size_f32 + sizeof(glm::vec4);
+
+    const std::streamsize depth_slice_size_f16 = dimensions.x * dimensions.y * 2;
+    const std::streamsize time_slice_size_f16 = depth_slice_size_f16 * dimensions.z;
+    const std::streamsize channel_size_f16 = time_slice_size_f16 * dimensions.w;
+    const std::streamsize data_size_f16 = channel_size_f16 * 3; // 3 = channel_count
+    const auto expected_file_size_f16 = data_size_f16 + sizeof(glm::vec4);
 
     file.seekg(0, std::ios::end);
     const auto file_size = file.tellg();
-    const auto expected_file_size = time_slice_size * dimensions.w;
-    if (file_size != expected_file_size) {
-        lava::log()->error("file size mismatch: expected {} bytes, got {} bytes", expected_file_size, file_size);
+
+    std::shared_ptr<DataSource> data_source;
+    if (file_size == expected_file_size_f16) {
+        data_source = std::make_shared<DataSource>(DataSource{
+            .filename = path.string(),
+            .format = Format::Float16,
+            .dimensions = dimensions,
+            .channel_count = 3,
+            .resolution = dimensions,
+            .data_offset = sizeof(glm::uvec4),
+            .data_size = data_size_f16,
+            .time_slice_size = time_slice_size_f16,
+            .z_slice_size = depth_slice_size_f16,
+            .channel_size = channel_size_f16,
+        });
+    } else if (file_size == expected_file_size_f32) {
+        data_source = std::make_shared<DataSource>(DataSource{
+            .filename = path.string(),
+            .format = Format::Float32,
+            .dimensions = dimensions,
+            .channel_count = 3,
+            .resolution = dimensions,
+            .data_offset = sizeof(glm::uvec4),
+            .data_size = data_size_f32,
+            .time_slice_size = time_slice_size_f32,
+            .z_slice_size = depth_slice_size_f32,
+            .channel_size = channel_size_f32,
+        });
+    } else {
+        lava::log()->error("file size mismatch: expected {} (Float16) or {} (Float32) bytes, got {} bytes", expected_file_size_f16, expected_file_size_f32, file_size);
         return nullptr;
     }
-
     lava::log()->info("raw dataset loaded (file: {}, dimensions: {}x{}x{}x{})", path.string(), dimensions.x, dimensions.y, dimensions.z, dimensions.w);
-
-    auto data_source = std::make_shared<DataSource>(DataSource{
-        .filename = path.string(),
-        .format = Format::Float32,
-        .dimensions = dimensions,
-        .data_offset = 0,
-        .data_size = file_size,
-        .time_slice_size = time_slice_size,
-        .z_slice_size = depth_slice_size,
-    });
     data_source->file.swap(file);
     return data_source;
 }
@@ -107,10 +135,13 @@ std::shared_ptr<DataSource> DataSource::open_ktx_file(const std::filesystem::pat
         .filename = path.string(),
         .format = Format::BC6H,
         .dimensions = dimensions,
+        .channel_count = 1,
+        .resolution = dimensions,
         .data_offset = file.tellg(),
         .data_size = image_size,
         .time_slice_size = time_slice_size,
         .z_slice_size = z_size_in_bytes,
+        .channel_size = image_size,
     });
     dataset->file.swap(file);
     return dataset;
@@ -126,17 +157,14 @@ void DataSource::imgui() {
     }
 }
 
-std::streampos DataSource::get_offset(int z, int t) {
-    return this->data_offset + t * this->time_slice_size + z * this->z_slice_size;
-}
-
 void DataSource::read(void* buffer) {
     assert(buffer);
     this->file.seekg(this->data_offset);
     this->file.read(reinterpret_cast<char*>(buffer), this->data_size);
 }
 
-void DataSource::read_z_slice(int z, int t, void* out) {
-    this->file.seekg(get_offset(z, t));
-    this->file.read(reinterpret_cast<char*>(out), this->z_slice_size);
+void DataSource::read_time_slice(int c, int t, void* buffer) {
+    assert(buffer);
+    this->file.seekg(this->data_offset + c * this->channel_size + t * this->time_slice_size);
+    this->file.read(reinterpret_cast<char*>(buffer), this->time_slice_size);
 }

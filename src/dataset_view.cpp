@@ -1,6 +1,7 @@
 #include "dataset_view.hpp"
 #include "shaders.hpp"
 #include "time_slices.hpp"
+#include <cstdint>
 #include <imgui.h>
 #include <liblava/base/base.hpp>
 #include <liblava/block/render_pass.hpp>
@@ -11,6 +12,7 @@ struct Constants {
     float minimum;
     float difference;
     float depth;
+    std::uint32_t channel_count;
 };
 
 DatasetView::DatasetView() {
@@ -25,16 +27,20 @@ bool DatasetView::create(lava::app& app) {
     this->quad = lava::create_mesh(this->device, lava::mesh_type::quad);
 
     this->descriptor = lava::descriptor::make();
-    this->descriptor->add_binding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT);
+    auto binding = lava::descriptor::binding::make(0);
+    binding->set_count(3);
+    binding->set_type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+    binding->set_stage_flags(VK_SHADER_STAGE_FRAGMENT_BIT);
+    this->descriptor->add(binding);
     if (!descriptor->create(this->device)) {
         return false;
     }
 
     this->descriptor_pool = lava::descriptor::pool::make();
     if (!descriptor_pool->create(this->device, {
-                                                   {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_TIME_SLICES},
+                                                   {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_TIME_SLICES * 3},
                                                },
-                                 MAX_TIME_SLICES)) {
+                                 MAX_TIME_SLICES * 3)) {
         return false;
     }
 
@@ -114,6 +120,7 @@ void DatasetView::render(VkCommandBuffer command_buffer) {
             .minimum = this->min,
             .difference = this->max - this->min,
             .depth = static_cast<float>(this->z_slice - 1) / (this->dataset->data->dimensions.z - 1),
+            .channel_count = this->dataset->data->channel_count,
         };
 
         this->pipeline_layout->bind(command_buffer, this->descriptor_sets[this->t_slice - 1]);
@@ -146,17 +153,39 @@ void DatasetView::allocate_descriptor_sets() {
     std::vector<VkWriteDescriptorSet> descriptor_set_writes;
     for (unsigned t = 0; t < num_time_slices; ++t) {
         auto descriptor_set = this->descriptor->allocate(this->descriptor_pool->get());
+        this->descriptor_sets.push_back(descriptor_set);
+
+        const bool single_channel = this->dataset->data->channel_count == 1;
+
         descriptor_set_writes.push_back(VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .dstSet = descriptor_set,
             .dstBinding = 0,
+            .dstArrayElement = 0,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .pImageInfo = &this->dataset->time_slices[t].image_info,
+            .pImageInfo = &this->dataset->get_image(0, t).image_info
         });
-        this->descriptor_sets.push_back(descriptor_set);
+        descriptor_set_writes.push_back(VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = descriptor_set,
+            .dstBinding = 0,
+            .dstArrayElement = 1,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .pImageInfo = &this->dataset->get_image(single_channel ? 0 : 1, t).image_info
+        });
+        descriptor_set_writes.push_back(VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = descriptor_set,
+            .dstBinding = 0,
+            .dstArrayElement = 2,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .pImageInfo = &this->dataset->get_image(single_channel ? 0 : 2, t).image_info
+        });
     }
-    this->device->vkUpdateDescriptorSets(num_time_slices, descriptor_set_writes.data());
+    this->device->vkUpdateDescriptorSets(descriptor_set_writes.size(), descriptor_set_writes.data());
 }
 
 void DatasetView::free_descriptor_sets() {

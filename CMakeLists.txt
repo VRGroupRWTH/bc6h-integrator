@@ -18,7 +18,7 @@ add_executable(
   src/integrator.hpp src/integrator.cpp
   src/data_source.hpp src/data_source.cpp
   src/dataset_view.hpp src/dataset_view.cpp
-  src/integration.glsl src/spawn_seeds.comp
+  src/integration.glsl src/integrate_raw.comp src/integrate_bc6h.comp
   src/dataset_view.vert src/dataset_view.frag
   src/lines.vert src/lines.frag
 )
