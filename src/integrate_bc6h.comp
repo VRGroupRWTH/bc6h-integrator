@@ -30,7 +30,7 @@ void main()
 
         position = initial_position;
     } else {
-        position = vertices[line_buffer_offset - 1].xyz;
+        position = vertices[seed_id * constants.total_step_count + indirect_draw[seed_id].vertex_count - 1].xyz;
     }
 
     float t = constants.first_step * constants.dt;
