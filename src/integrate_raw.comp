@@ -14,7 +14,7 @@ void main()
         gl_GlobalInvocationID.x +
         gl_GlobalInvocationID.y * constants.seed_dimensions.x + 
         gl_GlobalInvocationID.z * constants.seed_dimensions.x * constants.seed_dimensions.y;
-    const uint line_buffer_offset = seed_id * constants.step_count + constants.first_step;
+    const uint line_buffer_offset = seed_id * constants.total_step_count + constants.first_step;
 
     vec3 position;
     if (constants.first_step == 0) {
@@ -30,11 +30,11 @@ void main()
 
         position = initial_position;
     } else {
-        position = vertices[line_buffer_offset - 1].xyz;
+        position = vertices[seed_id * constants.total_step_count + indirect_draw[seed_id].vertex_count - 1].xyz;
     }
 
     float t = constants.first_step * constants.dt;
-    for (uint s = 1; s < constants.step_count; ++s) {
+    for (uint s = constants.first_step == 0 ? 1 : 0; s < constants.step_count; ++s) {
         const vec4 sample_location = vec4(position, t);
         
         if (any(lessThan(sample_location, vec4(0))) || any(greaterThan(sample_location, constants.dataset_dimensions))) {

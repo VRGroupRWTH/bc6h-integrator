@@ -43,6 +43,7 @@ class Integrator {
     void destroy_integration();
 
     void reset_dataset();
+    bool prepare_integration();
     bool integrate();
 
     lava::app* app;
@@ -55,11 +56,13 @@ class Integrator {
         VkBuffer indirect_buffer;
         VmaAllocation indirect_buffer_allocation;
 
-        VkCommandBuffer command_buffer;
-        VkFence command_buffer_fence;
-
         unsigned int seed_count;
         unsigned int integration_steps;
+
+        double gpu_time = 0.0;
+        double cpu_time = 0.0;
+
+        bool complete = false;
 
         bool create_buffers(glm::uvec3 seed_spawn, std::uint32_t integration_steps, lava::device_p device, const lava::queue& compute_queue);
         void update_descriptor_set(lava::device_p device, VkDescriptorSet descriptor_set);
@@ -95,4 +98,6 @@ class Integrator {
     unsigned int integration_steps = 10000;
     unsigned int batch_size = 100;
     bool should_integrate = false;
+
+    std::thread integration_thread;
 };
