@@ -21,6 +21,7 @@ add_executable(
   src/integration.glsl src/integrate_raw.comp src/integrate_bc6h.comp
   src/dataset_view.vert src/dataset_view.frag
   src/lines.vert src/lines.frag
+  src/seeding.comp
 )
 
 target_compile_definitions(

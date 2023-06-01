@@ -27,6 +27,7 @@ constexpr std::uint32_t WORK_GROUP_SIZE_X_CONSTANT_ID = 0;
 constexpr std::uint32_t WORK_GROUP_SIZE_Y_CONSTANT_ID = 1;
 constexpr std::uint32_t WORK_GROUP_SIZE_Z_CONSTANT_ID = 2;
 constexpr std::uint32_t TIME_STEPS_CONSTANT_ID = 3;
+constexpr std::uint32_t EXPLICIT_INTERPOLATION_ID = 4;
 
 Integrator::Integrator() {
     this->download_file_name.fill('\0');
@@ -48,6 +49,7 @@ bool Integrator::create(lava::app& app) {
 void Integrator::destroy() {
     this->destroy_integration();
     this->destroy_render_pipeline();
+    this->destroy_seeding_pipeline();
     this->destroy_integration_pipeline();
     this->destroy_descriptor();
 
@@ -85,6 +87,7 @@ void Integrator::render(VkCommandBuffer command_buffer) {
 
 void Integrator::set_dataset(Dataset::Ptr dataset) {
     this->destroy_integration();
+    this->destroy_seeding_pipeline();
     this->destroy_integration_pipeline();
     this->destroy_descriptor();
 
@@ -120,6 +123,10 @@ void Integrator::imgui() {
     ImGui::DragInt("Steps", reinterpret_cast<int*>(&this->integration_steps));
     ImGui::DragInt("Batch Size", reinterpret_cast<int*>(&this->batch_size));
     ImGui::DragFloat("Delta Time", &this->delta_time, 0.001f, 0.0f);
+
+    if(ImGui::Checkbox("Explicit Interpolation", &this->explicit_interpolation)) {
+        this->recreate_integration_pipeline = true;
+    }
 
     ImGui::BeginDisabled(!this->dataset || this->integration_in_progress());
     if (ImGui::Button("Integrate")) {
@@ -304,6 +311,80 @@ void Integrator::destroy_render_pipeline() {
     }
 }
 
+bool Integrator::create_seeding_pipeline() {
+    lava::log()->debug("create seeding pipeline");
+
+    VkPushConstantRange constant_range;
+    constant_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    constant_range.offset = 0;
+    constant_range.size = sizeof(Constants);
+
+    this->seeding_pipeline_layout = lava::pipeline_layout::make();
+    this->seeding_pipeline_layout->add(this->descriptor);
+    this->seeding_pipeline_layout->add(constant_range);
+
+    if (!this->seeding_pipeline_layout->create(this->device)) {
+        lava::log()->error("can't create seeding pipeline layout!");
+
+        return false;
+    }
+
+    std::array<uint32_t, 3> seeding_constants;
+    seeding_constants[0] = this->work_group_size.x;
+    seeding_constants[1] = this->work_group_size.x;
+    seeding_constants[2] = this->work_group_size.x;
+
+    VkSpecializationMapEntry workgroup_size_x;
+    workgroup_size_x.constantID = WORK_GROUP_SIZE_X_CONSTANT_ID;
+    workgroup_size_x.offset = 0;
+    workgroup_size_x.size = sizeof(uint32_t);
+
+    VkSpecializationMapEntry workgroup_size_y;
+    workgroup_size_y.constantID = WORK_GROUP_SIZE_Y_CONSTANT_ID;
+    workgroup_size_y.offset = sizeof(uint32_t);
+    workgroup_size_y.size = sizeof(uint32_t);
+
+    VkSpecializationMapEntry workgroup_size_z;
+    workgroup_size_z.constantID = WORK_GROUP_SIZE_Z_CONSTANT_ID;
+    workgroup_size_z.offset = 2 * sizeof(uint32_t);
+    workgroup_size_z.size = sizeof(uint32_t);
+
+    lava::pipeline::shader_stage::ptr shader_stage = lava::pipeline::shader_stage::make(VK_SHADER_STAGE_COMPUTE_BIT);
+    shader_stage->add_specialization_entry(workgroup_size_x);
+    shader_stage->add_specialization_entry(workgroup_size_y);
+    shader_stage->add_specialization_entry(workgroup_size_z);
+
+    if (!shader_stage->create(this->device, seeding_comp_cdata, lava::cdata(seeding_constants.data(), seeding_constants.size() * sizeof(uint32_t)))) {
+        lava::log()->error("can't create seeding compute shader!");
+
+        return false;
+    }
+
+    this->seeding_pipeline = lava::compute_pipeline::make(this->device, this->app->pipeline_cache);
+    this->seeding_pipeline->set_layout(this->seeding_pipeline_layout);
+    this->seeding_pipeline->set(shader_stage);
+
+    if (!this->seeding_pipeline->create()) {
+        lava::log()->error("can't create seeding pipeline!");
+
+        return false;
+    }
+
+    return true;
+}
+
+void Integrator::destroy_seeding_pipeline() {
+    if (this->seeding_pipeline_layout) {
+        this->seeding_pipeline_layout->destroy();
+        this->seeding_pipeline_layout = nullptr;
+    }
+
+    if (this->seeding_pipeline) {
+        this->seeding_pipeline->destroy();
+        this->seeding_pipeline = nullptr;
+    }
+}
+
 bool Integrator::create_integration_pipeline() {
     lava::log()->debug("create integration pipeline");
     this->integration_pipeline_layout = lava::pipeline_layout::make();
@@ -338,11 +419,13 @@ bool Integrator::create_integration_pipeline() {
         glm::uint work_group_size_y;
         glm::uint work_group_size_z;
         glm::uint time_steps;
+        VkBool32 explicit_interpolation;
     } const integration_constants = {
         .work_group_size_x = this->work_group_size.x,
         .work_group_size_y = this->work_group_size.y,
         .work_group_size_z = this->work_group_size.z,
         .time_steps = this->dataset->data->dimensions.w,
+        .explicit_interpolation = this->explicit_interpolation
     };
 
     lava::pipeline::shader_stage::ptr shader_stage = lava::pipeline::shader_stage::make(VK_SHADER_STAGE_COMPUTE_BIT);
@@ -366,6 +449,11 @@ bool Integrator::create_integration_pipeline() {
         .offset = offsetof(IntegrationConstants, time_steps),
         .size = sizeof(glm::uint),
     });
+    shader_stage->add_specialization_entry({
+        .constantID = EXPLICIT_INTERPOLATION_ID,
+        .offset = offsetof(IntegrationConstants, explicit_interpolation),
+        .size = sizeof(VkBool32),
+    });
     if (!shader_stage->create(this->device, *shader, lava::cdata(&integration_constants, sizeof(integration_constants)))) {
         lava::log()->error("failed to create integration shader stage");
         return false;
@@ -376,8 +464,6 @@ bool Integrator::create_integration_pipeline() {
         lava::log()->error("failed to create integration pipeline");
         return false;
     }
-
-    this->recreate_integration_pipeline = false;
 
     return true;
 }
@@ -420,7 +506,7 @@ bool Integrator::Integration::create_buffers(glm::uvec3 seed_spawn, std::uint32_
     this->integration_steps = integration_steps;
     this->seed_count = seed_spawn.x * seed_spawn.y * seed_spawn.z;
 
-    const std::size_t buffer_size = seed_count * integration_steps * sizeof(glm::vec4);
+    const std::size_t buffer_size = seed_count * (integration_steps + 1) * sizeof(glm::vec4); //Increase integration steps by one for seeding position
 
     const std::array<std::uint32_t, 2> queue_family_indices = {
         device->get_queues()[queue_indices::GRAPHICS].family,
@@ -521,13 +607,24 @@ void Integrator::destroy_integration() {
 }
 
 bool Integrator::prepare_integration() {
-    if (this->recreate_integration_pipeline || !this->integration_pipeline) {
+    if (this->recreate_integration_pipeline || !this->seeding_pipeline || !this->integration_pipeline) {
+        if (this->seeding_pipeline) {
+            this->destroy_seeding_pipeline();
+        }
+
+        if (!this->create_seeding_pipeline()) {
+            return false;
+        }
+
         if (this->integration_pipeline) {
             this->destroy_integration_pipeline();
         }
+
         if (!this->create_integration_pipeline()) {
             return false;
         }
+
+        this->recreate_integration_pipeline = false;
     }
 
     this->destroy_integration();
@@ -544,123 +641,202 @@ bool Integrator::prepare_integration() {
 }
 
 bool Integrator::integrate() {
-
-    Constants c{
-        .dataset_resolution = this->dataset->data->resolution,
-        .dataset_dimensions = this->dataset->data->dimensions_in_meters_and_seconds(),
-        .seed_dimensions = this->seed_spawn,
-        .dt = this->delta_time,
-        .total_step_count = this->integration->integration_steps,
-        .first_step = 0,
-        .step_count = this->integration_steps,
-    };
-
-    lava::timer sw;
+    VkCommandBufferAllocateInfo command_buffer_info;
+    command_buffer_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    command_buffer_info.pNext = nullptr;
+    command_buffer_info.commandPool = this->command_pool;
+    command_buffer_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    command_buffer_info.commandBufferCount = 1;
 
     VkCommandBuffer command_buffer = VK_NULL_HANDLE;
-    if (!this->device->vkAllocateCommandBuffers(this->command_pool, 1, &command_buffer)) {
-        lava::log()->error("failed to create command buffer for integration");
+
+    if (vkAllocateCommandBuffers(this->device->get(), &command_buffer_info, &command_buffer) != VK_SUCCESS) {
+        lava::log()->error("can't create command buffer for integration!");
+
         return false;
     }
 
-    VkFence fence;
+    VkFenceCreateInfo fence_info;
+    fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    fence_info.pNext = nullptr;
+    fence_info.flags = 0;
 
-    VkFenceCreateInfo fence_create{
-        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-    };
-    this->device->vkCreateFence(&fence_create, &fence);
+    VkFence fence = VK_NULL_HANDLE;
 
+    if (vkCreateFence(this->device->get(), &fence_info, lava::memory::instance().alloc(), &fence) != VK_SUCCESS) {
+        lava::log()->error("can't create fence for integration!");
+
+        return false;
+    }
+
+    Constants constants;
+    constants.dataset_resolution = this->dataset->data->resolution;
+    constants.dataset_dimensions = this->dataset->data->dimensions_in_meters_and_seconds();
+    constants.seed_dimensions = this->seed_spawn;
+    constants.dt = this->delta_time;
+    constants.total_step_count = this->integration->integration_steps;
+    constants.first_step = 0;
+    constants.step_count = this->integration_steps;
+
+    this->integration->cpu_time = 0.0;
+    this->integration->gpu_time = 0.0;
+    this->integration->complete = false;
+
+    memset(this->progress_buffer->get_mapped_data(), 0, 4);
+
+    lava::timer timer;
+
+    if (!this->perform_seeding(command_buffer, fence, timer, constants)) {
+        return false;
+    }
+
+    if (!this->perform_integration(command_buffer, fence, timer, constants)) {
+        return false;
+    }
+
+    this->integration->cpu_time = timer.elapsed().count();
+    this->integration->complete = true;
+
+    vkFreeCommandBuffers(this->device->get(), this->command_pool, 1, &command_buffer);
+    vkDestroyFence(this->device->get(), fence, lava::memory::instance().alloc());
+
+    return true;
+}
+
+bool Integrator::perform_seeding(VkCommandBuffer command_buffer, VkFence fence, lava::timer& timer, Constants& constants) {
+    lava::log()->debug("start seeding");
+
+    bool result = this->submit_and_measure_command(command_buffer, fence, timer, [=]() {
+        this->seeding_pipeline->bind(command_buffer);
+        this->seeding_pipeline_layout->bind(command_buffer, this->descriptor_set, 0, {}, VK_PIPELINE_BIND_POINT_COMPUTE);
+
+        glm::uvec3 work_group_count = (this->seed_spawn + this->work_group_size - 1u) / this->work_group_size;
+
+        vkCmdPushConstants(command_buffer, this->seeding_pipeline_layout->get(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Constants), &constants);
+        vkCmdDispatch(command_buffer, work_group_count.x, work_group_count.y, work_group_count.z);
+    });
+
+    return result;
+}
+
+bool Integrator::perform_integration(VkCommandBuffer command_buffer, VkFence fence, lava::timer& timer, Constants& constants) {
     lava::log()->debug("start integration");
 
     unsigned int step_count = 0;
     while (step_count < this->integration_steps) {
-        c.first_step = step_count;
-        c.step_count = std::min(this->integration_steps - step_count, this->batch_size);
+        constants.first_step = step_count;
+        constants.step_count = std::min(this->integration_steps - step_count, this->batch_size);
 
-        lava::log()->debug("batch (first_step = {}, step_count = {})", c.first_step, c.step_count);
+        lava::log()->debug("batch (first_step = {}, step_count = {})", constants.first_step, constants.step_count);
 
-        VkCommandBufferBeginInfo begin_info{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-        };
-        if (vkBeginCommandBuffer(command_buffer, &begin_info) != VK_SUCCESS) {
-            lava::log()->error("failed to begin command buffer");
+        bool result = this->submit_and_measure_command(command_buffer, fence, timer, [=]() {
+            this->integration_pipeline->bind(command_buffer);
+            this->integration_pipeline_layout->bind(command_buffer, this->descriptor_set, 0, {}, VK_PIPELINE_BIND_POINT_COMPUTE);
+
+            glm::uvec3 work_group_count = (this->seed_spawn + this->work_group_size - 1u) / this->work_group_size;
+
+            vkCmdPushConstants(command_buffer, this->seeding_pipeline_layout->get(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Constants), &constants);
+            vkCmdDispatch(command_buffer, work_group_count.x, work_group_count.y, work_group_count.z);
+        });
+
+        if (!result) {
             return false;
         }
 
-        device->call().vkCmdResetQueryPool(command_buffer, this->query_pool, 0, 2);
-
-        device->call().vkCmdWriteTimestamp(command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, this->query_pool, 0);
-
-        this->integration_pipeline->bind(command_buffer);
-        this->integration_pipeline_layout->bind(command_buffer, this->descriptor_set, 0, {}, VK_PIPELINE_BIND_POINT_COMPUTE);
-
-        device->call().vkCmdPushConstants(
-                command_buffer, 
-                this->integration_pipeline_layout->get(),
-                VK_SHADER_STAGE_COMPUTE_BIT,
-                0, sizeof(Constants), &c);
-
-        // device->call().vkCmdPushConstants(
-        //     command_buffer,
-        //     this->integration_pipeline_layout->get(),
-        //     VK_SHADER_STAGE_COMPUTE_BIT,
-        //     offsetof(Constants, first_step),
-        //     sizeof(uint32_t) * 2,
-        //     &c.first_step
-        // );
-        device->call().vkCmdDispatch(
-            command_buffer,
-            (this->seed_spawn.x + this->work_group_size.x - 1) / this->work_group_size.x,
-            (this->seed_spawn.y + this->work_group_size.y - 1) / this->work_group_size.y,
-            (this->seed_spawn.z + this->work_group_size.z - 1) / this->work_group_size.z
-        );
-
-        device->call().vkCmdWriteTimestamp(command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, this->query_pool, 1);
-
-        if (vkEndCommandBuffer(command_buffer) != VK_SUCCESS) {
-            lava::log()->error("failed to end command buffer");
-            return false;
-        }
-
-        VkSubmitInfo submit_info{
-            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .commandBufferCount = 1,
-            .pCommandBuffers = &command_buffer};
-        if (!device->vkQueueSubmit(this->compute_queue.vk_queue, 1, &submit_info, fence)) {
-            lava::log()->error("failed to submit command buffer");
-            return false;
-        }
-        this->integration->cpu_time = sw.elapsed().count();
-        while (this->device->vkWaitForFences(1, &fence, true, 1000 * 1000).value == VK_TIMEOUT) {
-        }
-        this->device->vkResetFences(1, &fence);
-        this->integration->cpu_time = sw.elapsed().count();
-
-        std::array<std::uint64_t, 2> timestamps;
-        if (this->device->call().vkGetQueryPoolResults(
-                this->device->get(),
-                this->query_pool,
-                0, 2,
-                sizeof(timestamps), timestamps.data(), sizeof(timestamps[0]),
-                VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT
-            ) != VK_SUCCESS) {
-            lava::log()->error("failed to receive gpu times");
-        } else {
-            const std::uint64_t duration_ns = timestamps[1] - timestamps[0];
-            const double duration_ms = duration_ns / 1000.0 / 1000.0;
-            this->integration->gpu_time += duration_ms;
-        }
-
-        step_count += c.step_count;
-        // break;
+        step_count += constants.step_count;
     }
-    lava::log()->debug("integration dispatched ({} ms)", sw.elapsed().count());
 
-    this->device->vkFreeCommandBuffers(this->command_pool, 1, &command_buffer);
+    lava::log()->debug("integration dispatched ({} ms)", timer.elapsed().count());
 
-    this->integration->cpu_time = sw.elapsed().count();
-    this->integration->complete = true;
+    return true;
+}
+
+bool Integrator::submit_and_measure_command(VkCommandBuffer command_buffer, VkFence fence, lava::timer& timer, std::function<void()> function) {
+    VkCommandBufferBeginInfo begin_info;
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.pNext = nullptr;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    begin_info.pInheritanceInfo = nullptr;
+
+    if(vkBeginCommandBuffer(command_buffer, &begin_info) != VK_SUCCESS) {
+        lava::log()->error("can't begin command buffer!");
+
+        return false;
+    }
+
+    vkCmdResetQueryPool(command_buffer, this->query_pool, 0, 2);
+    vkCmdWriteTimestamp(command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, this->query_pool, 0);
+
+    function();
+
+    vkCmdWriteTimestamp(command_buffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, this->query_pool, 1);
+
+    if (vkEndCommandBuffer(command_buffer) != VK_SUCCESS) {
+        lava::log()->error("can't end command buffer!");
+
+        return false;
+    }
+
+    VkSubmitInfo submit_info;
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.pNext = nullptr;
+    submit_info.waitSemaphoreCount = 0;
+    submit_info.pWaitSemaphores = nullptr;
+    submit_info.pWaitDstStageMask = nullptr;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &command_buffer;
+    submit_info.signalSemaphoreCount = 0;
+    submit_info.pSignalSemaphores = nullptr;
+
+    if(vkQueueSubmit(this->compute_queue.vk_queue, 1, &submit_info, fence) != VK_SUCCESS) {
+        lava::log()->error("can't submit command buffer!");
+
+        return false;
+    }
+
+    this->integration->cpu_time = timer.elapsed().count();
+
+    while (true) {
+        const uint64_t check_intervall = 10000000; //Timeout after 10ms
+
+        VkResult result = vkWaitForFences(this->device->get(), 1, &fence, VK_TRUE, check_intervall);
+
+        this->integration->cpu_time = timer.elapsed().count(); //CPU time is updated every 10ms
+
+        if (result == VK_SUCCESS) {
+            break;
+        }
+
+        else if (result == VK_TIMEOUT) {
+            continue;
+        }
+
+        else {
+            lava::log()->error("can't wait for completion of command buffer!");
+
+            return false;
+        }
+    }
+
+    if(vkResetFences(this->device->get(), 1, &fence) != VK_SUCCESS) {
+        lava::log()->error("can't reset fence!");
+
+        return false;
+    }
+
+    std::array<std::uint64_t, 2> timestamps;
+
+    if (vkGetQueryPoolResults(this->device->get(), this->query_pool, 0, 2, sizeof(timestamps), timestamps.data(), sizeof(timestamps[0]), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) != VK_SUCCESS) {
+        lava::log()->error("failed to receive gpu times!");
+
+        return false;
+    }
+
+    const float timestamp_period = this->device->get_properties().limits.timestampPeriod;
+    const double duration_ns = (timestamps[1] - timestamps[0]) * (double)timestamp_period;
+    const double duration_ms = duration_ns / 1000.0 / 1000.0;
+
+    this->integration->gpu_time += duration_ms;
 
     return true;
 }
@@ -669,7 +845,7 @@ bool Integrator::download_trajectories(const std::string& file_name) {
     const std::size_t seed_count = this->integration.value().seed_count;
     const std::size_t integration_steps = this->integration.value().integration_steps;
 
-    const std::size_t line_buffer_size = seed_count * integration_steps * sizeof(glm::vec4);
+    const std::size_t line_buffer_size = seed_count * (integration_steps + 1) * sizeof(glm::vec4); //Increase integration steps by one for seeding position
     const std::size_t indirect_buffer_size = seed_count * sizeof(VkDrawIndirectCommand);
 
     VmaAllocationCreateInfo allocation_info;

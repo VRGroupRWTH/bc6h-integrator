@@ -9,6 +9,8 @@
 #include <span>
 #include <array>
 
+struct Constants;
+
 class Integrator {
   public:
     using Ptr = std::shared_ptr<Integrator>;
@@ -38,6 +40,9 @@ class Integrator {
     bool create_descriptor();
     void destroy_descriptor();
 
+    bool create_seeding_pipeline();
+    void destroy_seeding_pipeline();
+
     bool create_integration_pipeline();
     void destroy_integration_pipeline();
 
@@ -47,6 +52,9 @@ class Integrator {
     void reset_dataset();
     bool prepare_integration();
     bool integrate();
+    bool perform_seeding(VkCommandBuffer command_buffer, VkFence fence, lava::timer& timer, Constants& constants);
+    bool perform_integration(VkCommandBuffer command_buffer, VkFence fence, lava::timer& timer, Constants& constants);
+    bool submit_and_measure_command(VkCommandBuffer command_buffer, VkFence fence, lava::timer& timer, std::function<void()> function);
 
     bool download_trajectories(const std::string& file_name);
     bool write_trajectories(const std::string& file_name, std::span<glm::vec4> line_buffer, std::span<VkDrawIndirectCommand> indirect_buffer);
@@ -86,6 +94,9 @@ class Integrator {
     VkCommandPool command_pool = VK_NULL_HANDLE;
     VkQueryPool query_pool = VK_NULL_HANDLE;
 
+    lava::pipeline_layout::ptr seeding_pipeline_layout;
+    lava::compute_pipeline::ptr seeding_pipeline;
+
     lava::pipeline_layout::ptr integration_pipeline_layout;
     lava::compute_pipeline::ptr integration_pipeline;
     bool recreate_integration_pipeline = true;
@@ -102,6 +113,7 @@ class Integrator {
     float delta_time = 0.0001;
     unsigned int integration_steps = 10000;
     unsigned int batch_size = 100;
+    bool explicit_interpolation = false;
     bool should_integrate = false;
 
     std::thread integration_thread;
