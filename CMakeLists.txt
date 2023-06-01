@@ -23,6 +23,11 @@ add_executable(
   src/lines.vert src/lines.frag
 )
 
+target_compile_definitions(
+  bc6h-integrator
+  PRIVATE NOMINMAX
+)
+
 target_link_libraries(
   bc6h-integrator
   PRIVATE lava::engine shaderc sync::sync
