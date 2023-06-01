@@ -6,6 +6,8 @@
 #include <liblava/block/compute_pipeline.hpp>
 #include <liblava/block/render_pass.hpp>
 #include <optional>
+#include <span>
+#include <array>
 
 class Integrator {
   public:
@@ -13,7 +15,7 @@ class Integrator {
 
     static Ptr make() { return std::make_shared<Integrator>(); }
 
-    Integrator() = default;
+    Integrator();
     ~Integrator() { this->destroy(); }
 
     void render(VkCommandBuffer command_buffer);
@@ -44,6 +46,9 @@ class Integrator {
 
     void reset_dataset();
     bool integrate();
+
+    bool download_trajectories(const std::string& file_name);
+    bool write_trajectories(const std::string& file_name, std::span<glm::vec4> line_buffer, std::span<VkDrawIndirectCommand> indirect_buffer);
 
     lava::app* app;
     Dataset::Ptr dataset;
@@ -95,4 +100,7 @@ class Integrator {
     unsigned int integration_steps = 10000;
     unsigned int batch_size = 100;
     bool should_integrate = false;
+
+    //Download
+    std::array<char, 512> download_file_name;
 };
