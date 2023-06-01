@@ -27,6 +27,10 @@ constexpr std::uint32_t WORK_GROUP_SIZE_Y_CONSTANT_ID = 1;
 constexpr std::uint32_t WORK_GROUP_SIZE_Z_CONSTANT_ID = 2;
 constexpr std::uint32_t TIME_STEPS_CONSTANT_ID = 3;
 
+Integrator::Integrator() {
+    this->download_file_name.fill('\0');
+}
+
 bool Integrator::create(lava::app& app) {
     const auto& queues = app.device->queues();
     this->compute_queue = queues[queue_indices::COMPUTE];
@@ -116,6 +120,15 @@ void Integrator::imgui() {
         this->should_integrate = true;
     }
     ImGui::EndDisabled();
+
+    ImGui::InputText("File Name", this->download_file_name.data(), this->download_file_name.size());
+
+    ImGui::BeginDisabled(!this->integration.has_value() || this->download_file_name.empty());
+    if (ImGui::Button("Download")) {
+        this->download_trajectories(this->download_file_name.data());
+    }
+    ImGui::EndDisabled();
+
     if (this->integration_in_progress()) {
         auto progress = reinterpret_cast<const std::uint32_t*>(this->progress_buffer->get_mapped_data());
         // lava::log()->info("{}", *progress);
@@ -415,7 +428,7 @@ bool Integrator::Integration::create_buffers(glm::uvec3 seed_spawn, std::uint32_
     const VkBufferCreateInfo line_buffer_create_info{
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .size = buffer_size,
-        .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         .sharingMode = VK_SHARING_MODE_CONCURRENT,
         .queueFamilyIndexCount = queue_family_indices.size(),
         .pQueueFamilyIndices = queue_family_indices.data(),
@@ -438,7 +451,7 @@ bool Integrator::Integration::create_buffers(glm::uvec3 seed_spawn, std::uint32_
     const VkBufferCreateInfo indirect_buffer_create_info{
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .size = sizeof(VkDrawIndirectCommand) * seed_count,
-        .usage = VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        .usage = VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         .sharingMode = VK_SHARING_MODE_CONCURRENT,
         .queueFamilyIndexCount = queue_family_indices.size(),
         .pQueueFamilyIndices = queue_family_indices.data(),
@@ -607,6 +620,260 @@ bool Integrator::integrate() {
         lava::log()->error("failed to submit command buffer");
         return false;
     }
+
+    return true;
+}
+
+bool Integrator::download_trajectories(const std::string& file_name) {
+    const std::size_t seed_count = this->integration.value().seed_count;
+    const std::size_t integration_steps = this->integration.value().integration_steps;
+
+    const std::size_t line_buffer_size = seed_count * integration_steps * sizeof(glm::vec4);
+    const std::size_t indirect_buffer_size = seed_count * sizeof(VkDrawIndirectCommand);
+
+    VmaAllocationCreateInfo allocation_info;
+    allocation_info.flags = 0;
+    allocation_info.usage = VMA_MEMORY_USAGE_GPU_TO_CPU;
+    allocation_info.requiredFlags = 0;
+    allocation_info.preferredFlags = 0;
+    allocation_info.memoryTypeBits = 0;
+    allocation_info.pool = VK_NULL_HANDLE;
+    allocation_info.pUserData = nullptr;
+    allocation_info.priority = 0.0f;
+
+    VkBufferCreateInfo line_staging_buffer_info;
+    line_staging_buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    line_staging_buffer_info.pNext = nullptr;
+    line_staging_buffer_info.flags = 0;
+    line_staging_buffer_info.size = line_buffer_size;
+    line_staging_buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    line_staging_buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    line_staging_buffer_info.queueFamilyIndexCount = 0;
+    line_staging_buffer_info.pQueueFamilyIndices = nullptr;
+
+    VkBuffer line_staging_buffer = VK_NULL_HANDLE;
+    VmaAllocation line_staging_buffer_allocation = VK_NULL_HANDLE;
+
+    if (vmaCreateBuffer(this->device->alloc(), &line_staging_buffer_info, &allocation_info, &line_staging_buffer, &line_staging_buffer_allocation, nullptr) != VK_SUCCESS) {
+        lava::log()->error("Can't create staging buffer for line buffer during download!");
+
+        return false;
+    }
+
+    VkBufferCreateInfo indirect_staging_buffer_info;
+    indirect_staging_buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    indirect_staging_buffer_info.pNext = nullptr;
+    indirect_staging_buffer_info.flags = 0;
+    indirect_staging_buffer_info.size = indirect_buffer_size;
+    indirect_staging_buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    indirect_staging_buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    indirect_staging_buffer_info.queueFamilyIndexCount = 0;
+    indirect_staging_buffer_info.pQueueFamilyIndices = nullptr;
+
+    VkBuffer indirect_staging_buffer = VK_NULL_HANDLE;
+    VmaAllocation indirect_staging_buffer_allocation = VK_NULL_HANDLE;
+
+    if (vmaCreateBuffer(this->device->alloc(), &indirect_staging_buffer_info, &allocation_info, &indirect_staging_buffer, &indirect_staging_buffer_allocation, nullptr) != VK_SUCCESS) {
+        lava::log()->error("Can't create staging buffer for indirect buffer during download!");
+
+        return false;
+    }
+
+    VkCommandBufferAllocateInfo command_buffer_info;
+    command_buffer_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    command_buffer_info.pNext = nullptr;
+    command_buffer_info.commandPool = this->command_pool;
+    command_buffer_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    command_buffer_info.commandBufferCount = 1;
+
+    VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+
+    if (vkAllocateCommandBuffers(this->device->get(), &command_buffer_info, &command_buffer) != VK_SUCCESS) {
+        lava::log()->error("Can't create command buffer for trajectory download!");
+
+        return false;
+    }
+
+    VkCommandBufferBeginInfo begin_info;
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.pNext = nullptr;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    begin_info.pInheritanceInfo = nullptr;
+
+    if (vkBeginCommandBuffer(command_buffer, &begin_info) != VK_SUCCESS) {
+        lava::log()->error("Can't begin command buffer for trajectory download!");
+
+        return false;
+    }
+
+    VkBufferCopy line_copy;
+    line_copy.srcOffset = 0;
+    line_copy.dstOffset = 0;
+    line_copy.size = line_buffer_size;
+
+    vkCmdCopyBuffer(command_buffer, this->integration.value().line_buffer, line_staging_buffer, 1, &line_copy);
+
+    VkBufferCopy indirect_copy;
+    indirect_copy.srcOffset = 0;
+    indirect_copy.dstOffset = 0;
+    indirect_copy.size = indirect_buffer_size;
+
+    vkCmdCopyBuffer(command_buffer, this->integration.value().indirect_buffer, indirect_staging_buffer, 1, &indirect_copy);
+
+    std::array<VkBufferMemoryBarrier, 2> buffer_barriers;
+    buffer_barriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    buffer_barriers[0].pNext = nullptr;
+    buffer_barriers[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    buffer_barriers[0].dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    buffer_barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    buffer_barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    buffer_barriers[0].buffer = line_staging_buffer;
+    buffer_barriers[0].offset = 0;
+    buffer_barriers[0].size = VK_WHOLE_SIZE;
+
+    buffer_barriers[1].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    buffer_barriers[1].pNext = nullptr;
+    buffer_barriers[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    buffer_barriers[1].dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    buffer_barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    buffer_barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    buffer_barriers[1].buffer = indirect_staging_buffer;
+    buffer_barriers[1].offset = 0;
+    buffer_barriers[1].size = VK_WHOLE_SIZE;
+
+    vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, buffer_barriers.size(), buffer_barriers.data(), 0, nullptr);
+
+    if (vkEndCommandBuffer(command_buffer) != VK_SUCCESS) {
+        lava::log()->error("Can't end command buffer for trajectory download!");
+
+        return false;
+    }
+
+    //Make sure that no one is reading or writing the line and indirect buffer 
+    if (vkDeviceWaitIdle(this->device->get()) != VK_SUCCESS) {
+        lava::log()->error("Can't wait for device idle during trajectory download!");
+
+        return false;
+    }
+
+    VkFenceCreateInfo fence_info;
+    fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    fence_info.pNext = nullptr;
+    fence_info.flags = 0;
+
+    VkFence fence = VK_NULL_HANDLE;
+
+    if (vkCreateFence(this->device->get(), &fence_info, lava::memory::instance().alloc(), &fence) != VK_SUCCESS) {
+        lava::log()->error("Can't create fence for trajectory download!");
+
+        return false;
+    }
+
+    VkSubmitInfo submit_info;
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.pNext = nullptr;
+    submit_info.waitSemaphoreCount = 0;
+    submit_info.pWaitSemaphores = nullptr;
+    submit_info.pWaitDstStageMask = nullptr;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &command_buffer;
+    submit_info.signalSemaphoreCount = 0;
+    submit_info.pSignalSemaphores = nullptr;
+
+    if(vkQueueSubmit(this->compute_queue.vk_queue, 1, &submit_info, fence) != VK_SUCCESS) {
+        lava::log()->error("Can't submit command buffer for trajectory download!");
+
+        return false;
+    }
+
+    if(vkWaitForFences(this->device->get(), 1, &fence, VK_TRUE, std::numeric_limits<uint64_t>::max()) != VK_SUCCESS) {
+        lava::log()->error("Can't wait for fence during trajectory download!");
+
+        return false;
+    }
+
+    if(vmaInvalidateAllocation(this->device->alloc(), line_staging_buffer_allocation, 0, VK_WHOLE_SIZE) != VK_SUCCESS) {
+        lava::log()->error("Can't invalidate staging buffer for line buffer!");
+
+        return false;
+    }
+
+    if (vmaInvalidateAllocation(this->device->alloc(), indirect_staging_buffer_allocation, 0, VK_WHOLE_SIZE) != VK_SUCCESS) {
+        lava::log()->error("Can't invalidate staging buffer for indirect buffer!");
+
+        return false;
+    }
+
+    glm::vec4* line_buffer_pointer = nullptr;
+    VkDrawIndirectCommand* indirect_buffer_pointer = nullptr;
+
+    if(vmaMapMemory(this->device->alloc(), line_staging_buffer_allocation, (void**)&line_buffer_pointer) != VK_SUCCESS) {
+        lava::log()->error("Can't map line staging buffer!");
+
+        return false;
+    }
+
+    if (vmaMapMemory(this->device->alloc(), indirect_staging_buffer_allocation, (void**)&indirect_buffer_pointer) != VK_SUCCESS) {
+        lava::log()->error("Can't map indirect staging buffer!");
+
+        return false;
+    }
+
+    std::span<glm::vec4> line_buffer_span = std::span<glm::vec4>(line_buffer_pointer, line_buffer_pointer + seed_count * integration_steps);
+    std::span<VkDrawIndirectCommand> indirect_buffer_span = std::span<VkDrawIndirectCommand>(indirect_buffer_pointer, indirect_buffer_pointer + seed_count);
+
+    if (!this->write_trajectories(file_name, line_buffer_span, indirect_buffer_span)) {
+        return false;
+    }
+
+    vmaUnmapMemory(this->device->alloc(), line_staging_buffer_allocation);
+    vmaUnmapMemory(this->device->alloc(), indirect_staging_buffer_allocation);
+
+    vkDestroyFence(this->device->get(), fence, lava::memory::instance().alloc());
+    vkFreeCommandBuffers(this->device->get(), this->command_pool, 1, &command_buffer);
+
+    vmaDestroyBuffer(this->device->alloc(), line_staging_buffer, line_staging_buffer_allocation);
+    vmaDestroyBuffer(this->device->alloc(), indirect_staging_buffer, indirect_staging_buffer_allocation);
+
+    return true;
+}
+
+bool Integrator::write_trajectories(const std::string& file_name, std::span<glm::vec4> line_buffer, std::span<VkDrawIndirectCommand> indirect_buffer) {
+    if (file_name.empty()) {
+        lava::log()->error("File name empty!");
+
+        return false;
+    }
+
+    std::fstream length_file;
+    std::fstream trajectory_file;
+
+    length_file.open(file_name + "_length.bin", std::ios::out | std::ios::binary);
+
+    if (!length_file.good()) {
+        lava::log()->error("Can't open length file!");
+
+        return false;
+    }
+
+    trajectory_file.open(file_name + "_trajectory.bin", std::ios::out | std::ios::binary);
+
+    if (!trajectory_file.good()) {
+        lava::log()->error("Can't open trajectory file!");
+
+        return false;
+    }
+
+    for (VkDrawIndirectCommand& indirect_command : indirect_buffer) {
+        uint32_t offset = indirect_command.firstVertex;
+        uint32_t length = indirect_command.vertexCount;
+
+        length_file.write((const char*)&length, sizeof(length));
+        trajectory_file.write((const char*)(line_buffer.data() + offset), length * sizeof(glm::vec4));
+    }
+
+    length_file.close();
+    trajectory_file.close();
 
     return true;
 }
