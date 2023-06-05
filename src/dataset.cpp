@@ -97,7 +97,10 @@ bool Dataset::Image::create(lava::device_p device, const DataSource::Ptr& data, 
         },
     };
 
-    device->vkCreateImageView(&image_view_info, &this->view);
+    if (device->vkCreateImageView(&image_view_info, &this->view).value != VK_SUCCESS) {
+        lava::log()->error("failed to create image view for dataset");
+        return false;
+    }
 
     this->image_info.sampler = sampler;
     this->image_info.imageView = this->view;
@@ -124,7 +127,11 @@ bool Dataset::create(lava::device_p device) {
         .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
         .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
     };
-    device->vkCreateSampler(&sampler_info, &this->sampler);
+    if (device->vkCreateSampler(&sampler_info, &this->sampler).value != VK_SUCCESS) {
+        lava::log()->error("failed to create sampler");
+        this->loading_state.write()->set_step(LoadingState::Step::ERROR);
+        return false;
+    }
 
     // this->staging.resize(2);
     // for (auto& staging_buffer : this->staging) {
@@ -439,6 +446,7 @@ void Dataset::load(std::size_t staging_buffer_count) {
 
             this->loading_state.write()->advance_substep();
             this->loading_time.exchange(loading_timer.elapsed());
+            break;
         }
 
         {
