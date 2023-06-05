@@ -72,6 +72,8 @@ void Integrator::render(VkCommandBuffer command_buffer) {
         return;
     }
 
+    const VkBool32 invert_colormap = this->line_colormap_invert;
+
     this->render_pipeline->bind(command_buffer);
     const VkDeviceSize buffer_offsets = 0;
     const glm::vec3 offset = -this->dataset->data->dimensions_in_meters() * 0.5f;
@@ -81,6 +83,11 @@ void Integrator::render(VkCommandBuffer command_buffer) {
     this->device->call().vkCmdSetLineWidth(command_buffer, this->line_width);
     this->device->call().vkCmdPushConstants(command_buffer, this->render_pipeline_layout->get(), VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(world_view_projection), &world_view_projection);
     this->device->call().vkCmdPushConstants(command_buffer, this->render_pipeline_layout->get(), VK_SHADER_STAGE_FRAGMENT_BIT, 16 * 4, sizeof(this->line_color), glm::value_ptr(line_color));
+    this->device->call().vkCmdPushConstants(command_buffer, this->render_pipeline_layout->get(), VK_SHADER_STAGE_FRAGMENT_BIT, 20 * 4, sizeof(this->line_colormap), &this->line_colormap);
+    this->device->call().vkCmdPushConstants(command_buffer, this->render_pipeline_layout->get(), VK_SHADER_STAGE_FRAGMENT_BIT, 20 * 4, sizeof(this->line_colormap), &this->line_colormap);
+    this->device->call().vkCmdPushConstants(command_buffer, this->render_pipeline_layout->get(), VK_SHADER_STAGE_FRAGMENT_BIT, 21 * 4, sizeof(invert_colormap), &invert_colormap);
+    this->device->call().vkCmdPushConstants(command_buffer, this->render_pipeline_layout->get(), VK_SHADER_STAGE_FRAGMENT_BIT, 22 * 4, sizeof(this->line_velocity_min), &this->line_velocity_min);
+    this->device->call().vkCmdPushConstants(command_buffer, this->render_pipeline_layout->get(), VK_SHADER_STAGE_FRAGMENT_BIT, 23 * 4, sizeof(this->line_velocity_max), &this->line_velocity_max);
     this->device->call().vkCmdBindVertexBuffers(command_buffer, 0, 1, &this->integration->line_buffer, &buffer_offsets);
     this->device->call().vkCmdDrawIndirect(command_buffer, this->integration->indirect_buffer, 0, this->integration->seed_count, sizeof(VkDrawIndirectCommand));
 }
@@ -152,8 +159,35 @@ void Integrator::imgui() {
     }
 
     if (ImGui::CollapsingHeader("Rendering", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const std::vector<const char*> line_colormap_names = {
+            "Constant Color",
+            "MATLAB_bone",
+            "MATLAB_hot",
+            "MATLAB_jet",
+            "MATLAB_summer",
+            "IDL_Rainbow",
+            "IDL_Mac_Style",
+            "IDL_CB-YIGn",
+            "IDL_CB-YIGnBu",
+            "IDL_CB-RdBu",
+            "IDL_CB-RdYiGn",
+            "IDL_CB-Spectral",
+            "transform_rainbow"
+        };
+
+        ImGui::Combo("Line Colormap", (int32_t*)&this->line_colormap, line_colormap_names.data(), line_colormap_names.size());
+
+        if (this->line_colormap == 0) {
+            ImGui::ColorEdit4("Line Color", glm::value_ptr(this->line_color));
+        }
+
+        else {
+            ImGui::Checkbox("Line Colormap Invert", &this->line_colormap_invert);
+            ImGui::InputFloat("Line Velocity Min", &this->line_velocity_min, 0.01f);
+            ImGui::InputFloat("Line Velocity Max", &this->line_velocity_max, 0.01f);
+        }
+
         ImGui::DragFloat("Line Width", &this->line_width, 0.025f, 0.1, 10.0f);
-        ImGui::ColorEdit4("Line Color", glm::value_ptr(this->line_color));
     }
 }
 
@@ -263,7 +297,7 @@ void Integrator::destroy_descriptor() {
 bool Integrator::create_render_pipeline() {
     this->render_pipeline_layout = lava::pipeline_layout::make();
     this->render_pipeline_layout->add_push_constant_range({VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4)});
-    this->render_pipeline_layout->add_push_constant_range({VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(glm::mat4), sizeof(glm::vec4)});
+    this->render_pipeline_layout->add_push_constant_range({VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(glm::mat4), sizeof(glm::vec4) + sizeof(uint32_t) + sizeof(VkBool32) + 2 * sizeof(float)});
     if (!render_pipeline_layout->create(device)) {
         destroy();
         return false;

@@ -45,7 +45,7 @@ void main()
     const vec3 relative_seed_position = vec3(gl_GlobalInvocationID) / constants.seed_dimensions;        
     const vec3 initial_position = vec3(constants.dataset_dimensions) * relative_seed_position; 
 
-    vertices[line_buffer_offset] = vec4(initial_position, float(seed_id));
+    vertices[line_buffer_offset] = vec4(initial_position, 0.0);
 
     indirect_draw[seed_id].vertex_count = 1;
     indirect_draw[seed_id].instance_count = 1;

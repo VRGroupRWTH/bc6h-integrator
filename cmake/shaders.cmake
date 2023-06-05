@@ -5,7 +5,7 @@ find_program(
     REQUIRED
 )
 
-function(compile_shaders target)
+function(compile_shaders target extern_directories)
     message(STATUS ${target})
     set(shaders_header "${CMAKE_CURRENT_BINARY_DIR}/include/shaders.hpp")
     file(WRITE ${shaders_header} "#pragma once\n#include <cstdint>\n#include <liblava/core/data.hpp>\n")
@@ -35,7 +35,7 @@ function(compile_shaders target)
 
             add_custom_command(
                 OUTPUT ${generated_file}
-                COMMAND ${GLSL_LANG_VALIDATOR} ${source} "--vn" ${var_name} "-V" "-o" ${generated_file} "--depfile" ${depfile}
+                COMMAND ${GLSL_LANG_VALIDATOR} -I${extern_directories} ${source} "--vn" ${var_name} "-V" "-o" ${generated_file} "--depfile" ${depfile}
                 MAIN_DEPENDENCY ${source}
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
                 DEPFILE ${depfile}

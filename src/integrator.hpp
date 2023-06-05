@@ -106,6 +106,10 @@ class Integrator {
     lava::render_pipeline::ptr render_pipeline;
     float line_width = 1.0f;
     glm::vec4 line_color = glm::vec4(0.0, 0.0, 0.0, 1.0);
+    uint32_t line_colormap = 0;
+    bool line_colormap_invert = false;
+    float line_velocity_min = 0.0f;
+    float line_velocity_max = 1.0f;
 
     // Integration settings
     glm::uvec3 work_group_size = {8, 1, 1};

@@ -223,8 +223,11 @@ void main()
             break;
         }
 
-        const vec3 next_position = position + constants.dt * rungekutta4(sample_location);
-        vertices[line_buffer_offset + s + 1] = vec4(next_position, seed_id);
+        const vec3 velocity = rungekutta4(sample_location);
+        const float velocity_magnitude = length(velocity);
+
+        const vec3 next_position = position + constants.dt * velocity;
+        vertices[line_buffer_offset + s + 1] = vec4(next_position, velocity_magnitude);
         position = next_position;
         t += constants.dt;
 
