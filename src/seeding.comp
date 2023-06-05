@@ -1,0 +1,54 @@
+#version 450 core
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x_id = 0) in;               
+layout(local_size_y_id = 1) in;
+layout(local_size_z_id = 2) in;
+
+struct DrawIndirectCommand {
+    uint vertex_count;
+    uint instance_count;
+    uint first_vertex;
+    uint first_instance;
+};
+
+layout(std140, set = 0, binding = 0) buffer line_buffer {
+   vec4 vertices[];
+};
+
+layout(std140, set = 0, binding = 2) buffer indirect_buffer {
+   DrawIndirectCommand indirect_draw[];
+};
+
+layout(push_constant) uniform Constants {
+    vec4 dataset_resolution;
+    vec4 dataset_dimensions;
+    uvec3 seed_dimensions;
+    float dt;
+    uint total_step_count;
+    uint first_step;
+    uint step_count;
+} constants;
+
+void main()
+{
+    if (any(greaterThanEqual(gl_GlobalInvocationID, constants.seed_dimensions))) {
+        return;
+    }
+
+    const uint seed_id =
+        gl_GlobalInvocationID.x +
+        gl_GlobalInvocationID.y * constants.seed_dimensions.x + 
+        gl_GlobalInvocationID.z * constants.seed_dimensions.x * constants.seed_dimensions.y;
+    const uint line_buffer_offset = seed_id * (constants.total_step_count + 1);
+
+    const vec3 relative_seed_position = vec3(gl_GlobalInvocationID) / constants.seed_dimensions;        
+    const vec3 initial_position = vec3(constants.dataset_dimensions) * relative_seed_position; 
+
+    vertices[line_buffer_offset] = vec4(initial_position, float(seed_id));
+
+    indirect_draw[seed_id].vertex_count = 1;
+    indirect_draw[seed_id].instance_count = 1;
+    indirect_draw[seed_id].first_vertex = line_buffer_offset;
+    indirect_draw[seed_id].first_instance = 0;
+}
