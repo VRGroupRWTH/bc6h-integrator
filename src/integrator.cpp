@@ -46,6 +46,10 @@ bool Integrator::create(lava::app& app) {
 }
 
 void Integrator::destroy() {
+    if (this->integration_thread.joinable()) {
+        this->integration_thread.join();
+    }
+
     this->destroy_integration();
     this->destroy_render_pipeline();
     this->destroy_seeding_pipeline();
