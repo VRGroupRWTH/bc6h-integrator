@@ -1,5 +1,4 @@
 layout(push_constant) uniform Constants {
-    vec4 dataset_resolution;
     vec4 dataset_dimensions;
     uvec3 seed_dimensions;
     float dt;
@@ -48,10 +47,9 @@ layout(set = 0, binding = 3) uniform sampler3D dataset[TIME_STEPS];
 #endif
 
 #if defined(DATA_RAW_TEXTURES)
-float sample_explicit(sampler3D dataset_sampler, vec3 norm_coordinates) {
-    vec3 unnorm_coordinate = norm_coordinates * constants.dataset_resolution.xyz;
-    vec3 base_coordinate = floor(unnorm_coordinate - vec3(0.5));
-    vec3 filter_weight = unnorm_coordinate - (base_coordinate + vec3(0.5));
+float sample_explicit(sampler3D dataset_sampler, vec3 coordinates) {
+    vec3 base_coordinate = floor(coordinates- vec3(0.5));
+    vec3 filter_weight = coordinates- (base_coordinate + vec3(0.5));
 
     float sample_000 = texelFetch(dataset_sampler, ivec3(base_coordinate) + ivec3(0,0,0), 0).x;
     float sample_100 = texelFetch(dataset_sampler, ivec3(base_coordinate) + ivec3(1,0,0), 0).x;
@@ -77,24 +75,24 @@ float sample_explicit(sampler3D dataset_sampler, vec3 norm_coordinates) {
 }
 
 vec3 sample_dataset(vec4 coordinates) {
-    const float sampler_index = coordinates.w * constants.dataset_resolution.w;
+    const float sampler_index = coordinates.w;
     const int sampler_index_floored = int(floor(sampler_index));
     const int sampler_index_ceiled = int(ceil(sampler_index));
-    const vec3 texture_coordinates = coordinates.xyz / constants.dataset_dimensions.xyz;
 
     if (EXPLICIT_INTERPOLATION) {
         vec3 sample_floored = vec3(0.0);
-        sample_floored.x = sample_explicit(dataset_x[sampler_index_floored], texture_coordinates);
-        sample_floored.y = sample_explicit(dataset_y[sampler_index_floored], texture_coordinates);
-        sample_floored.z = sample_explicit(dataset_z[sampler_index_floored], texture_coordinates);
+        sample_floored.x = sample_explicit(dataset_x[sampler_index_floored], coordinates.xyz);
+        sample_floored.y = sample_explicit(dataset_y[sampler_index_floored], coordinates.xyz);
+        sample_floored.z = sample_explicit(dataset_z[sampler_index_floored], coordinates.xyz);
 
         vec3 sample_ceiled = vec3(0.0);
-        sample_ceiled.x = sample_explicit(dataset_x[sampler_index_ceiled], texture_coordinates);
-        sample_ceiled.y = sample_explicit(dataset_y[sampler_index_ceiled], texture_coordinates);
-        sample_ceiled.z = sample_explicit(dataset_z[sampler_index_ceiled], texture_coordinates);
+        sample_ceiled.x = sample_explicit(dataset_x[sampler_index_ceiled], coordinates.xyz);
+        sample_ceiled.y = sample_explicit(dataset_y[sampler_index_ceiled], coordinates.xyz);
+        sample_ceiled.z = sample_explicit(dataset_z[sampler_index_ceiled], coordinates.xyz);
         
         return mix(sample_floored, sample_ceiled, sampler_index - sampler_index_floored);
     } else {
+        const vec3 texture_coordinates = coordinates.xyz / constants.dataset_dimensions.xyz;
         const vec3 vec_floored = vec3(
             texture(dataset_x[sampler_index_floored], texture_coordinates).r,
             texture(dataset_y[sampler_index_floored], texture_coordinates).r,
@@ -114,10 +112,9 @@ vec3 sample_dataset(vec4 coordinates) {
     }
 }
 #elif defined(DATA_BC6H_TEXTURE)
-vec3 sample_explicit(sampler3D dataset_sampler, vec3 norm_coordinates) {
-    vec3 unnorm_coordinate = norm_coordinates * constants.dataset_resolution.xyz;
-    vec3 base_coordinate = floor(unnorm_coordinate - vec3(0.5));
-    vec3 filter_weight = unnorm_coordinate - (base_coordinate + vec3(0.5));
+vec3 sample_explicit(sampler3D dataset_sampler, vec3 coordinates) {
+    vec3 base_coordinate = floor(coordinates - vec3(0.5));
+    vec3 filter_weight = coordinates - (base_coordinate + vec3(0.5));
 
     vec3 sample_000 = texelFetch(dataset_sampler, ivec3(base_coordinate) + ivec3(0,0,0), 0).xyz;
     vec3 sample_100 = texelFetch(dataset_sampler, ivec3(base_coordinate) + ivec3(1,0,0), 0).xyz;
@@ -143,19 +140,19 @@ vec3 sample_explicit(sampler3D dataset_sampler, vec3 norm_coordinates) {
 }
 
 vec3 sample_dataset(vec4 coordinates) {
-    const float sampler_index = coordinates.w * constants.dataset_resolution.w;
+    const float sampler_index = coordinates.w;
     const int sampler_index_floored = int(floor(sampler_index));
     const int sampler_index_ceiled = int(ceil(sampler_index));
-    const vec3 texture_coordinates = coordinates.xyz / constants.dataset_dimensions.xyz;
 
     if (EXPLICIT_INTERPOLATION) {
-        vec3 sample_floored = sample_explicit(dataset[sampler_index_floored], texture_coordinates);
-        vec3 sample_ceiled = sample_explicit(dataset[sampler_index_ceiled], texture_coordinates);
+        vec3 sample_floored = sample_explicit(dataset[sampler_index_floored], coordinates.xyz);
+        vec3 sample_ceiled = sample_explicit(dataset[sampler_index_ceiled], coordinates.xyz);
 
         return mix(sample_floored, sample_ceiled, sampler_index - sampler_index_floored);
     }
 
     else {
+        const vec3 texture_coordinates = coordinates.xyz / constants.dataset_dimensions.xyz;
         return mix(
             texture(dataset[sampler_index_floored], texture_coordinates).xyz,
             texture(dataset[sampler_index_ceiled], texture_coordinates).xyz,
