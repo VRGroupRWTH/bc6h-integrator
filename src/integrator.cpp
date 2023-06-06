@@ -131,9 +131,9 @@ void Integrator::imgui() {
     }
     ImGui::DragInt3("Seed Dimensions", reinterpret_cast<int*>(glm::value_ptr(this->seed_spawn)));
     if (ImGui::DragInt("Steps", reinterpret_cast<int*>(&this->integration_steps))) {
-      if (this->dataset) {
-        this->delta_time = 1.0f / this->dataset->data->dimensions.w;
-      }
+        if (this->dataset) {
+            this->delta_time = 1.0f / this->dataset->data->dimensions.w;
+        }
     }
     ImGui::DragInt("Batch Size", reinterpret_cast<int*>(&this->batch_size));
     ImGui::DragFloat("Delta Time", &this->delta_time, 0.001f, 0.0f);
@@ -720,7 +720,7 @@ bool Integrator::integrate() {
     this->integration->cpu_time = 0.0;
     this->integration->gpu_time = 0.0;
     this->integration->complete = false;
-    this->integration->batch_count = this->batch_size;
+    this->integration->batch_count = (this->integration_steps + this->batch_size - 1) / this->batch_size;
     this->integration->current_batch = 0;
 
     memset(this->max_velocity_magnitude_buffer->get_mapped_data(), 0, 4);
