@@ -21,7 +21,6 @@ layout(std140, set = 0, binding = 2) buffer indirect_buffer {
 };
 
 layout(push_constant) uniform Constants {
-    vec4 dataset_resolution;
     vec4 dataset_dimensions;
     uvec3 seed_dimensions;
     float dt;

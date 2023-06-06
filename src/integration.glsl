@@ -1,5 +1,4 @@
 layout(push_constant) uniform Constants {
-    vec4 dataset_resolution;
     vec4 dataset_dimensions;
     uvec3 seed_dimensions;
     float dt;
@@ -47,7 +46,7 @@ layout(set = 0, binding = 3) uniform sampler3D dataset[TIME_STEPS];
 
 #if defined(DATA_RAW_TEXTURES)
 float sample_explicit(sampler3D dataset_sampler, vec3 norm_coordinates) {
-    vec3 unnorm_coordinate = norm_coordinates * constants.dataset_resolution.xyz;
+    vec3 unnorm_coordinate = norm_coordinates;
     vec3 base_coordinate = floor(unnorm_coordinate - vec3(0.5));
     vec3 filter_weight = unnorm_coordinate - (base_coordinate + vec3(0.5));
 
@@ -75,7 +74,7 @@ float sample_explicit(sampler3D dataset_sampler, vec3 norm_coordinates) {
 }
 
 vec3 sample_dataset(vec4 coordinates) {
-    const float sampler_index = coordinates.w * constants.dataset_resolution.w;
+    const float sampler_index = coordinates.w;
     const int sampler_index_floored = int(floor(sampler_index));
     const int sampler_index_ceiled = int(ceil(sampler_index));
     const vec3 texture_coordinates = coordinates.xyz / constants.dataset_dimensions.xyz;
@@ -113,7 +112,7 @@ vec3 sample_dataset(vec4 coordinates) {
 }
 #elif defined(DATA_BC6H_TEXTURE)
 vec3 sample_explicit(sampler3D dataset_sampler, vec3 norm_coordinates) {
-    vec3 unnorm_coordinate = norm_coordinates * constants.dataset_resolution.xyz;
+    vec3 unnorm_coordinate = norm_coordinates;
     vec3 base_coordinate = floor(unnorm_coordinate - vec3(0.5));
     vec3 filter_weight = unnorm_coordinate - (base_coordinate + vec3(0.5));
 
@@ -141,7 +140,7 @@ vec3 sample_explicit(sampler3D dataset_sampler, vec3 norm_coordinates) {
 }
 
 vec3 sample_dataset(vec4 coordinates) {
-    const float sampler_index = coordinates.w * constants.dataset_resolution.w;
+    const float sampler_index = coordinates.w;
     const int sampler_index_floored = int(floor(sampler_index));
     const int sampler_index_ceiled = int(ceil(sampler_index));
     const vec3 texture_coordinates = coordinates.xyz / constants.dataset_dimensions.xyz;

@@ -10,7 +10,6 @@
 #include <vulkan/vulkan_core.h>
 
 struct Constants {
-    glm::vec4 dataset_resolution;
     glm::vec4 dataset_dimensions;
     glm::uvec3 seed_dimensions;
     float dt;
@@ -74,10 +73,10 @@ void Integrator::render(VkCommandBuffer command_buffer) {
 
     this->render_pipeline->bind(command_buffer);
     const VkDeviceSize buffer_offsets = 0;
-    const glm::vec3 offset = -this->dataset->data->dimensions_in_meters() * 0.5f;
-    const glm::mat4 world = glm::translate(glm::mat4(), offset);
+    // const glm::vec3 offset = -this->dataset->data->dimensions_in_meters() * 0.5f;
+    const glm::mat4 world = glm::scale(glm::mat4(1.0f), glm::vec3(this->scaling));
     const glm::mat4 view_projection = this->app->camera.get_view_projection();
-    const glm::mat4 world_view_projection = view_projection;
+    const glm::mat4 world_view_projection = view_projection * world;
     this->device->call().vkCmdSetLineWidth(command_buffer, this->line_width);
     this->device->call().vkCmdPushConstants(command_buffer, this->render_pipeline_layout->get(), VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(world_view_projection), &world_view_projection);
     this->device->call().vkCmdPushConstants(command_buffer, this->render_pipeline_layout->get(), VK_SHADER_STAGE_FRAGMENT_BIT, 16 * 4, sizeof(this->line_color), glm::value_ptr(line_color));
@@ -95,6 +94,9 @@ void Integrator::set_dataset(Dataset::Ptr dataset) {
 
     if (this->dataset) {
         this->create_descriptor();
+
+        const auto dimensions = this->dataset->data->dimensions;
+        this->scaling = 1.0f / std::max(dimensions.x, std::max(dimensions.y, dimensions.z));
     }
 }
 
@@ -120,11 +122,15 @@ void Integrator::imgui() {
         this->recreate_integration_pipeline = true;
     }
     ImGui::DragInt3("Seed Dimensions", reinterpret_cast<int*>(glm::value_ptr(this->seed_spawn)));
-    ImGui::DragInt("Steps", reinterpret_cast<int*>(&this->integration_steps));
+    if (ImGui::DragInt("Steps", reinterpret_cast<int*>(&this->integration_steps))) {
+      if (this->dataset) {
+        this->delta_time = 1.0f / this->dataset->data->dimensions.w;
+      }
+    }
     ImGui::DragInt("Batch Size", reinterpret_cast<int*>(&this->batch_size));
     ImGui::DragFloat("Delta Time", &this->delta_time, 0.001f, 0.0f);
 
-    if(ImGui::Checkbox("Explicit Interpolation", &this->explicit_interpolation)) {
+    if (ImGui::Checkbox("Explicit Interpolation", &this->explicit_interpolation)) {
         this->recreate_integration_pipeline = true;
     }
 
@@ -152,6 +158,7 @@ void Integrator::imgui() {
     }
 
     if (ImGui::CollapsingHeader("Rendering", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::DragFloat("Scaling", &this->scaling, 0.01f, 0.00000001, 10.0f);
         ImGui::DragFloat("Line Width", &this->line_width, 0.025f, 0.1, 10.0f);
         ImGui::ColorEdit4("Line Color", glm::value_ptr(this->line_color));
     }
@@ -425,8 +432,7 @@ bool Integrator::create_integration_pipeline() {
         .work_group_size_y = this->work_group_size.y,
         .work_group_size_z = this->work_group_size.z,
         .time_steps = this->dataset->data->dimensions.w,
-        .explicit_interpolation = this->explicit_interpolation
-    };
+        .explicit_interpolation = this->explicit_interpolation};
 
     lava::pipeline::shader_stage::ptr shader_stage = lava::pipeline::shader_stage::make(VK_SHADER_STAGE_COMPUTE_BIT);
     shader_stage->add_specialization_entry({
@@ -506,7 +512,7 @@ bool Integrator::Integration::create_buffers(glm::uvec3 seed_spawn, std::uint32_
     this->integration_steps = integration_steps;
     this->seed_count = seed_spawn.x * seed_spawn.y * seed_spawn.z;
 
-    const std::size_t buffer_size = seed_count * (integration_steps + 1) * sizeof(glm::vec4); //Increase integration steps by one for seeding position
+    const std::size_t buffer_size = seed_count * (integration_steps + 1) * sizeof(glm::vec4); // Increase integration steps by one for seeding position
 
     const std::array<std::uint32_t, 2> queue_family_indices = {
         device->get_queues()[queue_indices::GRAPHICS].family,
@@ -670,8 +676,7 @@ bool Integrator::integrate() {
     }
 
     Constants constants;
-    constants.dataset_resolution = this->dataset->data->resolution;
-    constants.dataset_dimensions = this->dataset->data->dimensions_in_meters_and_seconds();
+    constants.dataset_dimensions = this->dataset->data->dimensions;
     constants.seed_dimensions = this->seed_spawn;
     constants.dt = this->delta_time;
     constants.total_step_count = this->integration->integration_steps;
@@ -758,7 +763,7 @@ bool Integrator::submit_and_measure_command(VkCommandBuffer command_buffer, VkFe
     begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     begin_info.pInheritanceInfo = nullptr;
 
-    if(vkBeginCommandBuffer(command_buffer, &begin_info) != VK_SUCCESS) {
+    if (vkBeginCommandBuffer(command_buffer, &begin_info) != VK_SUCCESS) {
         lava::log()->error("can't begin command buffer!");
 
         return false;
@@ -788,7 +793,7 @@ bool Integrator::submit_and_measure_command(VkCommandBuffer command_buffer, VkFe
     submit_info.signalSemaphoreCount = 0;
     submit_info.pSignalSemaphores = nullptr;
 
-    if(vkQueueSubmit(this->compute_queue.vk_queue, 1, &submit_info, fence) != VK_SUCCESS) {
+    if (vkQueueSubmit(this->compute_queue.vk_queue, 1, &submit_info, fence) != VK_SUCCESS) {
         lava::log()->error("can't submit command buffer!");
 
         return false;
@@ -797,11 +802,11 @@ bool Integrator::submit_and_measure_command(VkCommandBuffer command_buffer, VkFe
     this->integration->cpu_time = timer.elapsed().count();
 
     while (true) {
-        const uint64_t check_intervall = 10000000; //Timeout after 10ms
+        const uint64_t check_intervall = 10000000; // Timeout after 10ms
 
         VkResult result = vkWaitForFences(this->device->get(), 1, &fence, VK_TRUE, check_intervall);
 
-        this->integration->cpu_time = timer.elapsed().count(); //CPU time is updated every 10ms
+        this->integration->cpu_time = timer.elapsed().count(); // CPU time is updated every 10ms
 
         if (result == VK_SUCCESS) {
             break;
@@ -818,7 +823,7 @@ bool Integrator::submit_and_measure_command(VkCommandBuffer command_buffer, VkFe
         }
     }
 
-    if(vkResetFences(this->device->get(), 1, &fence) != VK_SUCCESS) {
+    if (vkResetFences(this->device->get(), 1, &fence) != VK_SUCCESS) {
         lava::log()->error("can't reset fence!");
 
         return false;
@@ -845,7 +850,7 @@ bool Integrator::download_trajectories(const std::string& file_name) {
     const std::size_t seed_count = this->integration.value().seed_count;
     const std::size_t integration_steps = this->integration.value().integration_steps;
 
-    const std::size_t line_buffer_size = seed_count * (integration_steps + 1) * sizeof(glm::vec4); //Increase integration steps by one for seeding position
+    const std::size_t line_buffer_size = seed_count * (integration_steps + 1) * sizeof(glm::vec4); // Increase integration steps by one for seeding position
     const std::size_t indirect_buffer_size = seed_count * sizeof(VkDrawIndirectCommand);
 
     VmaAllocationCreateInfo allocation_info;
@@ -966,7 +971,7 @@ bool Integrator::download_trajectories(const std::string& file_name) {
         return false;
     }
 
-    //Make sure that no one is reading or writing the line and indirect buffer 
+    // Make sure that no one is reading or writing the line and indirect buffer
     if (vkDeviceWaitIdle(this->device->get()) != VK_SUCCESS) {
         lava::log()->error("Can't wait for device idle during trajectory download!");
 
@@ -997,19 +1002,19 @@ bool Integrator::download_trajectories(const std::string& file_name) {
     submit_info.signalSemaphoreCount = 0;
     submit_info.pSignalSemaphores = nullptr;
 
-    if(vkQueueSubmit(this->compute_queue.vk_queue, 1, &submit_info, fence) != VK_SUCCESS) {
+    if (vkQueueSubmit(this->compute_queue.vk_queue, 1, &submit_info, fence) != VK_SUCCESS) {
         lava::log()->error("Can't submit command buffer for trajectory download!");
 
         return false;
     }
 
-    if(vkWaitForFences(this->device->get(), 1, &fence, VK_TRUE, std::numeric_limits<uint64_t>::max()) != VK_SUCCESS) {
+    if (vkWaitForFences(this->device->get(), 1, &fence, VK_TRUE, std::numeric_limits<uint64_t>::max()) != VK_SUCCESS) {
         lava::log()->error("Can't wait for fence during trajectory download!");
 
         return false;
     }
 
-    if(vmaInvalidateAllocation(this->device->alloc(), line_staging_buffer_allocation, 0, VK_WHOLE_SIZE) != VK_SUCCESS) {
+    if (vmaInvalidateAllocation(this->device->alloc(), line_staging_buffer_allocation, 0, VK_WHOLE_SIZE) != VK_SUCCESS) {
         lava::log()->error("Can't invalidate staging buffer for line buffer!");
 
         return false;
@@ -1024,7 +1029,7 @@ bool Integrator::download_trajectories(const std::string& file_name) {
     glm::vec4* line_buffer_pointer = nullptr;
     VkDrawIndirectCommand* indirect_buffer_pointer = nullptr;
 
-    if(vmaMapMemory(this->device->alloc(), line_staging_buffer_allocation, (void**)&line_buffer_pointer) != VK_SUCCESS) {
+    if (vmaMapMemory(this->device->alloc(), line_staging_buffer_allocation, (void**)&line_buffer_pointer) != VK_SUCCESS) {
         lava::log()->error("Can't map line staging buffer!");
 
         return false;
