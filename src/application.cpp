@@ -3,7 +3,6 @@
 #include <vulkan/vulkan_core.h>
 
 Application::Application(int argc, char* argv[]) : engine("bc6h integrator", {argc, argv}) {
-    this->file_dialog.SetPwd("/home/so225523/Data/BC6/Data/abc/");
     this->file_dialog.SetTitle("Load Dataset");
     this->file_dialog.SetTypeFilters({".raw", ".ktx"});
 }
@@ -82,6 +81,14 @@ bool Application::setup() {
     }
 
     this->engine.camera.position = glm::vec3(0, 0, 2);
+
+    auto& pos_args = this->engine.get_cmd_line().pos_args();
+    if (pos_args.size() > 1) {
+        std::filesystem::path dataset_path = pos_args.back();
+        lava::log()->debug("load dataset: {}", dataset_path.string());
+        this->load_dataset(dataset_path);
+        this->file_dialog.SetPwd(dataset_path.parent_path());
+    }
 
     return true;
 }

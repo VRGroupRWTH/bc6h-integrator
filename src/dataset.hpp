@@ -32,9 +32,10 @@ struct Dataset {
     struct Image {
         Image() = default;
         Image(const Image&) = delete;
-        Image(Image&& other) : device(other.device), image(other.image), allocation(other.allocation) {
+        Image(Image&& other) : device(other.device), image(other.image), view(other.view), allocation(other.allocation), image_info(other.image_info) {
             other.device = nullptr;
             other.image = VK_NULL_HANDLE;
+            other.view = VK_NULL_HANDLE;
             other.allocation = VK_NULL_HANDLE;
         }
         Image& operator=(const Image&) = delete;
