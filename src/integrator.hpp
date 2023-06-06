@@ -122,6 +122,7 @@ class Integrator {
     unsigned int integration_steps = 10000;
     unsigned int batch_size = 100;
     bool explicit_interpolation = false;
+    bool analytic_dataset = false;
     bool should_integrate = false;
 
     std::thread integration_thread;

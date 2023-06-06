@@ -15,12 +15,10 @@ struct DataSource {
         Float16,
         Float32,
         BC6H,
-        Analytic
     };
 
     static Ptr open_raw_file(const std::filesystem::path& path);
     static Ptr open_ktx_file(const std::filesystem::path& path);
-    static Ptr open_analytic();
 
     // std::streampos get_offset(int z, int t);
     void read(void* buffer);

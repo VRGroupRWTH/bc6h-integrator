@@ -33,8 +33,6 @@ class DatasetView {
     lava::render_pass::ptr render_pass;
     lava::pipeline_layout::ptr pipeline_layout;
     lava::render_pipeline::ptr pipeline;
-    lava::pipeline_layout::ptr analytic_pipeline_layout;
-    lava::render_pipeline::ptr analytic_pipeline;
 
     lava::descriptor::ptr descriptor;
     lava::descriptor::pool::ptr descriptor_pool;

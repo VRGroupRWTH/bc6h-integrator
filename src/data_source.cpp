@@ -144,23 +144,6 @@ std::shared_ptr<DataSource> DataSource::open_ktx_file(const std::filesystem::pat
     return dataset;
 }
 
-std::shared_ptr<DataSource> DataSource::open_analytic() {
-    auto dataset = std::make_shared<DataSource>(DataSource{
-        .filename = "Analytic",
-        .format = Format::Analytic,
-        .dimensions = glm::uvec4(0,0,0,0),
-        .channel_count = 0,
-        .resolution = glm::vec4(1000.0f, 1000.0f, 1000.0f, 10.0f),
-        .data_offset = 0,
-        .data_size = 0,
-        .time_slice_size = 0,
-        .z_slice_size = 0,
-        .channel_size = 0,
-    });
-
-    return dataset;
-}
-
 void DataSource::imgui() {
     ImGui::InputText("Filename", this->filename.data(), this->filename.length(), ImGuiInputTextFlags_ReadOnly);
     ImGui::InputInt4("Dimensions", reinterpret_cast<int*>(glm::value_ptr(this->dimensions)), ImGuiInputTextFlags_ReadOnly);
