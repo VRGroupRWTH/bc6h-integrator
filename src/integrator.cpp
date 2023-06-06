@@ -20,7 +20,7 @@ struct Constants {
 };
 
 constexpr std::uint32_t LINE_BUFFER_BINDING = 0;
-constexpr std::uint32_t PROGRESS_BUFFER_BINDING = 1;
+constexpr std::uint32_t MAX_VELOCITY_MAGNITUDE_BUFFER_BINDING = 1;
 constexpr std::uint32_t INDIRECT_BUFFER_BINDING = 2;
 constexpr std::uint32_t DATASET_BINDING_BASE = 3;
 constexpr std::uint32_t WORK_GROUP_SIZE_X_CONSTANT_ID = 0;
@@ -41,7 +41,7 @@ bool Integrator::create(lava::app& app) {
 
     return this->create_command_pool() &&
            this->create_query_pool() &&
-           this->create_progress_buffer();
+           this->create_max_velocity_magnitude_buffer();
 
     return true;
 }
@@ -61,9 +61,9 @@ void Integrator::destroy() {
         this->device->call().vkDestroyQueryPool(this->device->get(), this->query_pool, nullptr);
         this->query_pool = VK_NULL_HANDLE;
     }
-    if (this->progress_buffer) {
-        this->progress_buffer->destroy();
-        this->progress_buffer = nullptr;
+    if (this->max_velocity_magnitude_buffer) {
+        this->max_velocity_magnitude_buffer->destroy();
+        this->max_velocity_magnitude_buffer = nullptr;
     }
 }
 
@@ -131,7 +131,7 @@ void Integrator::imgui() {
     ImGui::DragInt("Batch Size", reinterpret_cast<int*>(&this->batch_size));
     ImGui::DragFloat("Delta Time", &this->delta_time, 0.001f, 0.0f);
 
-    if(ImGui::Checkbox("Explicit Interpolation", &this->explicit_interpolation)) {
+    if (ImGui::Checkbox("Explicit Interpolation", &this->explicit_interpolation)) {
         this->recreate_integration_pipeline = true;
     }
 
@@ -150,9 +150,9 @@ void Integrator::imgui() {
     ImGui::EndDisabled();
 
     if (this->integration_in_progress()) {
-        auto progress = reinterpret_cast<const std::uint32_t*>(this->progress_buffer->get_mapped_data());
-        lava::log()->debug("{}", *progress);
-        ImGui::ProgressBar(static_cast<float>(*progress) / (this->integration->seed_count * this->integration->integration_steps));
+        auto progress = float(this->integration->current_batch) / this->integration->batch_count;
+        // lava::log()->debug("{}", progress);
+        ImGui::ProgressBar(progress);
     }
     if (this->integration) {
         ImGui::Text("Duration: %f ms (CPU), %f ms (GPU)", this->integration->cpu_time, this->integration->gpu_time);
@@ -172,8 +172,7 @@ void Integrator::imgui() {
             "IDL_CB-RdBu",
             "IDL_CB-RdYiGn",
             "IDL_CB-Spectral",
-            "transform_rainbow"
-        };
+            "transform_rainbow"};
 
         ImGui::Combo("Line Colormap", (int32_t*)&this->line_colormap, line_colormap_names.data(), line_colormap_names.size());
 
@@ -183,23 +182,23 @@ void Integrator::imgui() {
 
         else {
             ImGui::Checkbox("Line Colormap Invert", &this->line_colormap_invert);
-            ImGui::InputFloat("Line Velocity Min", &this->line_velocity_min, 0.01f);
-            ImGui::InputFloat("Line Velocity Max", &this->line_velocity_max, 0.01f);
+            ImGui::DragFloat("Line Velocity Min", &this->line_velocity_min, 0.01f);
+            ImGui::DragFloat("Line Velocity Max", &this->line_velocity_max, 0.01f);
         }
 
         ImGui::DragFloat("Line Width", &this->line_width, 0.025f, 0.1, 10.0f);
     }
 }
 
-bool Integrator::create_progress_buffer() {
-    this->progress_buffer = lava::buffer::make();
-    this->progress_buffer->create_mapped(this->device, nullptr, 4, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+bool Integrator::create_max_velocity_magnitude_buffer() {
+    this->max_velocity_magnitude_buffer = lava::buffer::make();
+    this->max_velocity_magnitude_buffer->create_mapped(this->device, nullptr, 4, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
-    if (this->progress_buffer->get_mapped_data() == nullptr) {
+    if (this->max_velocity_magnitude_buffer->get_mapped_data() == nullptr) {
         lava::log()->error("failed to map data of progress buffer");
         return false;
     }
-    memset(this->progress_buffer->get_mapped_data(), 0, 4);
+    memset(this->max_velocity_magnitude_buffer->get_mapped_data(), 0, 4);
 
     return true;
 }
@@ -262,18 +261,18 @@ bool Integrator::create_descriptor() {
 
     this->descriptor_set = this->descriptor->allocate(this->descriptor_pool->get());
 
-    const VkDescriptorBufferInfo progress_buffer_info{
-        .buffer = this->progress_buffer->get(),
+    const VkDescriptorBufferInfo max_velocity_magnitude_buffer_info{
+        .buffer = this->max_velocity_magnitude_buffer->get(),
         .offset = 0,
         .range = VK_WHOLE_SIZE,
     };
     this->device->vkUpdateDescriptorSets({{
         .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
         .dstSet = this->descriptor_set,
-        .dstBinding = PROGRESS_BUFFER_BINDING,
+        .dstBinding = MAX_VELOCITY_MAGNITUDE_BUFFER_BINDING,
         .descriptorCount = 1,
         .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-        .pBufferInfo = &progress_buffer_info,
+        .pBufferInfo = &max_velocity_magnitude_buffer_info,
     }});
 
     return true;
@@ -459,8 +458,7 @@ bool Integrator::create_integration_pipeline() {
         .work_group_size_y = this->work_group_size.y,
         .work_group_size_z = this->work_group_size.z,
         .time_steps = this->dataset->data->dimensions.w,
-        .explicit_interpolation = this->explicit_interpolation
-    };
+        .explicit_interpolation = this->explicit_interpolation};
 
     lava::pipeline::shader_stage::ptr shader_stage = lava::pipeline::shader_stage::make(VK_SHADER_STAGE_COMPUTE_BIT);
     shader_stage->add_specialization_entry({
@@ -540,7 +538,7 @@ bool Integrator::Integration::create_buffers(glm::uvec3 seed_spawn, std::uint32_
     this->integration_steps = integration_steps;
     this->seed_count = seed_spawn.x * seed_spawn.y * seed_spawn.z;
 
-    const std::size_t buffer_size = seed_count * (integration_steps + 1) * sizeof(glm::vec4); //Increase integration steps by one for seeding position
+    const std::size_t buffer_size = seed_count * (integration_steps + 1) * sizeof(glm::vec4); // Increase integration steps by one for seeding position
 
     const std::array<std::uint32_t, 2> queue_family_indices = {
         device->get_queues()[queue_indices::GRAPHICS].family,
@@ -715,8 +713,10 @@ bool Integrator::integrate() {
     this->integration->cpu_time = 0.0;
     this->integration->gpu_time = 0.0;
     this->integration->complete = false;
+    this->integration->batch_count = this->batch_size;
+    this->integration->current_batch = 0;
 
-    memset(this->progress_buffer->get_mapped_data(), 0, 4);
+    memset(this->max_velocity_magnitude_buffer->get_mapped_data(), 0, 4);
 
     lava::timer timer;
 
@@ -778,6 +778,7 @@ bool Integrator::perform_integration(VkCommandBuffer command_buffer, VkFence fen
         }
 
         step_count += constants.step_count;
+        this->integration->current_batch += 1;
     }
 
     lava::log()->debug("integration dispatched ({} ms)", timer.elapsed().count());
@@ -792,7 +793,7 @@ bool Integrator::submit_and_measure_command(VkCommandBuffer command_buffer, VkFe
     begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     begin_info.pInheritanceInfo = nullptr;
 
-    if(vkBeginCommandBuffer(command_buffer, &begin_info) != VK_SUCCESS) {
+    if (vkBeginCommandBuffer(command_buffer, &begin_info) != VK_SUCCESS) {
         lava::log()->error("can't begin command buffer!");
 
         return false;
@@ -822,7 +823,7 @@ bool Integrator::submit_and_measure_command(VkCommandBuffer command_buffer, VkFe
     submit_info.signalSemaphoreCount = 0;
     submit_info.pSignalSemaphores = nullptr;
 
-    if(vkQueueSubmit(this->compute_queue.vk_queue, 1, &submit_info, fence) != VK_SUCCESS) {
+    if (vkQueueSubmit(this->compute_queue.vk_queue, 1, &submit_info, fence) != VK_SUCCESS) {
         lava::log()->error("can't submit command buffer!");
 
         return false;
@@ -831,11 +832,11 @@ bool Integrator::submit_and_measure_command(VkCommandBuffer command_buffer, VkFe
     this->integration->cpu_time = timer.elapsed().count();
 
     while (true) {
-        const uint64_t check_intervall = 10000000; //Timeout after 10ms
+        const uint64_t check_intervall = 10000000; // Timeout after 10ms
 
         VkResult result = vkWaitForFences(this->device->get(), 1, &fence, VK_TRUE, check_intervall);
 
-        this->integration->cpu_time = timer.elapsed().count(); //CPU time is updated every 10ms
+        this->integration->cpu_time = timer.elapsed().count(); // CPU time is updated every 10ms
 
         if (result == VK_SUCCESS) {
             break;
@@ -852,7 +853,7 @@ bool Integrator::submit_and_measure_command(VkCommandBuffer command_buffer, VkFe
         }
     }
 
-    if(vkResetFences(this->device->get(), 1, &fence) != VK_SUCCESS) {
+    if (vkResetFences(this->device->get(), 1, &fence) != VK_SUCCESS) {
         lava::log()->error("can't reset fence!");
 
         return false;
@@ -871,6 +872,7 @@ bool Integrator::submit_and_measure_command(VkCommandBuffer command_buffer, VkFe
     const double duration_ms = duration_ns / 1000.0 / 1000.0;
 
     this->integration->gpu_time += duration_ms;
+    this->line_velocity_max = *reinterpret_cast<const float*>(this->max_velocity_magnitude_buffer->get_mapped_data());
 
     return true;
 }
@@ -879,7 +881,7 @@ bool Integrator::download_trajectories(const std::string& file_name) {
     const std::size_t seed_count = this->integration.value().seed_count;
     const std::size_t integration_steps = this->integration.value().integration_steps;
 
-    const std::size_t line_buffer_size = seed_count * (integration_steps + 1) * sizeof(glm::vec4); //Increase integration steps by one for seeding position
+    const std::size_t line_buffer_size = seed_count * (integration_steps + 1) * sizeof(glm::vec4); // Increase integration steps by one for seeding position
     const std::size_t indirect_buffer_size = seed_count * sizeof(VkDrawIndirectCommand);
 
     VmaAllocationCreateInfo allocation_info;
@@ -1000,7 +1002,7 @@ bool Integrator::download_trajectories(const std::string& file_name) {
         return false;
     }
 
-    //Make sure that no one is reading or writing the line and indirect buffer 
+    // Make sure that no one is reading or writing the line and indirect buffer
     if (vkDeviceWaitIdle(this->device->get()) != VK_SUCCESS) {
         lava::log()->error("Can't wait for device idle during trajectory download!");
 
@@ -1031,19 +1033,19 @@ bool Integrator::download_trajectories(const std::string& file_name) {
     submit_info.signalSemaphoreCount = 0;
     submit_info.pSignalSemaphores = nullptr;
 
-    if(vkQueueSubmit(this->compute_queue.vk_queue, 1, &submit_info, fence) != VK_SUCCESS) {
+    if (vkQueueSubmit(this->compute_queue.vk_queue, 1, &submit_info, fence) != VK_SUCCESS) {
         lava::log()->error("Can't submit command buffer for trajectory download!");
 
         return false;
     }
 
-    if(vkWaitForFences(this->device->get(), 1, &fence, VK_TRUE, std::numeric_limits<uint64_t>::max()) != VK_SUCCESS) {
+    if (vkWaitForFences(this->device->get(), 1, &fence, VK_TRUE, std::numeric_limits<uint64_t>::max()) != VK_SUCCESS) {
         lava::log()->error("Can't wait for fence during trajectory download!");
 
         return false;
     }
 
-    if(vmaInvalidateAllocation(this->device->alloc(), line_staging_buffer_allocation, 0, VK_WHOLE_SIZE) != VK_SUCCESS) {
+    if (vmaInvalidateAllocation(this->device->alloc(), line_staging_buffer_allocation, 0, VK_WHOLE_SIZE) != VK_SUCCESS) {
         lava::log()->error("Can't invalidate staging buffer for line buffer!");
 
         return false;
@@ -1058,7 +1060,7 @@ bool Integrator::download_trajectories(const std::string& file_name) {
     glm::vec4* line_buffer_pointer = nullptr;
     VkDrawIndirectCommand* indirect_buffer_pointer = nullptr;
 
-    if(vmaMapMemory(this->device->alloc(), line_staging_buffer_allocation, (void**)&line_buffer_pointer) != VK_SUCCESS) {
+    if (vmaMapMemory(this->device->alloc(), line_staging_buffer_allocation, (void**)&line_buffer_pointer) != VK_SUCCESS) {
         lava::log()->error("Can't map line staging buffer!");
 
         return false;
