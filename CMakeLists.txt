@@ -9,6 +9,7 @@ set(CXX_STANDARD_REQUIRED ON)
 
 CPMAddPackage("gh:liblava/liblava#0.7.3")
 CPMAddPackage("gh:soehrl/cpp-sync#feature/rename-namespace")
+CPMAddPackage(NAME colormap GIT_REPOSITORY https://github.com/kbinani/colormap-shaders GIT_TAG master DOWNLOAD_ONLY YES)
 
 add_executable(
   bc6h-integrator
@@ -34,4 +35,6 @@ target_link_libraries(
   PRIVATE lava::engine shaderc sync::sync
 )
 
-compile_shaders(bc6h-integrator)
+set(shader_extern_directories ${colormap_SOURCE_DIR}/shaders/glsl)
+
+compile_shaders(bc6h-integrator ${shader_extern_directories})

@@ -33,7 +33,7 @@ class Integrator {
     void destroy_render_pipeline();
 
   private:
-    bool create_progress_buffer();
+    bool create_max_velocity_magnitude_buffer();
     bool create_command_pool();
     bool create_query_pool();
 
@@ -72,6 +72,9 @@ class Integrator {
         unsigned int seed_count;
         unsigned int integration_steps;
 
+        unsigned int current_batch;
+        unsigned int batch_count;
+
         double gpu_time = 0.0;
         double cpu_time = 0.0;
 
@@ -84,7 +87,7 @@ class Integrator {
     std::optional<Integration> integration;
 
     // Compute
-    lava::buffer::ptr progress_buffer;
+    lava::buffer::ptr max_velocity_magnitude_buffer;
     lava::device_p device;
     lava::queue compute_queue;
 
@@ -106,6 +109,10 @@ class Integrator {
     lava::render_pipeline::ptr render_pipeline;
     float line_width = 1.0f;
     glm::vec4 line_color = glm::vec4(0.0, 0.0, 0.0, 1.0);
+    uint32_t line_colormap = 0;
+    bool line_colormap_invert = false;
+    float line_velocity_min = 0.0f;
+    float line_velocity_max = 1.0f;
 
     // Integration settings
     glm::uvec3 work_group_size = {8, 1, 1};
