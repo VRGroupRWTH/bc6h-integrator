@@ -10,7 +10,6 @@
 #include <vulkan/vulkan_core.h>
 
 struct Constants {
-    glm::vec4 dataset_resolution;
     glm::vec4 dataset_dimensions;
     glm::uvec3 seed_dimensions;
     float dt;
@@ -76,10 +75,11 @@ void Integrator::render(VkCommandBuffer command_buffer) {
 
     this->render_pipeline->bind(command_buffer);
     const VkDeviceSize buffer_offsets = 0;
-    const glm::vec3 offset = -this->dataset->data->dimensions_in_meters() * 0.5f;
-    const glm::mat4 world = glm::translate(glm::mat4(), offset);
+    const glm::mat4 translation = glm::translate(glm::mat4(1.0f), -0.5f * glm::vec3(this->dataset->data->dimensions));
+    const glm::mat4 scaling = glm::scale(glm::mat4(1.0f), glm::vec3(this->scaling));
+    const glm::mat4 world = scaling * translation;
     const glm::mat4 view_projection = this->app->camera.get_view_projection();
-    const glm::mat4 world_view_projection = view_projection;
+    const glm::mat4 world_view_projection = view_projection * world;
     this->device->call().vkCmdSetLineWidth(command_buffer, this->line_width);
     this->device->call().vkCmdPushConstants(command_buffer, this->render_pipeline_layout->get(), VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(world_view_projection), &world_view_projection);
     this->device->call().vkCmdPushConstants(command_buffer, this->render_pipeline_layout->get(), VK_SHADER_STAGE_FRAGMENT_BIT, 16 * 4, sizeof(this->line_color), glm::value_ptr(line_color));
@@ -102,6 +102,9 @@ void Integrator::set_dataset(Dataset::Ptr dataset) {
 
     if (this->dataset) {
         this->create_descriptor();
+
+        const auto dimensions = this->dataset->data->dimensions;
+        this->scaling = 1.0f / std::max(dimensions.x, std::max(dimensions.y, dimensions.z));
     }
 }
 
@@ -127,7 +130,11 @@ void Integrator::imgui() {
         this->recreate_integration_pipeline = true;
     }
     ImGui::DragInt3("Seed Dimensions", reinterpret_cast<int*>(glm::value_ptr(this->seed_spawn)));
-    ImGui::DragInt("Steps", reinterpret_cast<int*>(&this->integration_steps));
+    if (ImGui::DragInt("Steps", reinterpret_cast<int*>(&this->integration_steps))) {
+      if (this->dataset) {
+        this->delta_time = 1.0f / this->dataset->data->dimensions.w;
+      }
+    }
     ImGui::DragInt("Batch Size", reinterpret_cast<int*>(&this->batch_size));
     ImGui::DragFloat("Delta Time", &this->delta_time, 0.001f, 0.0f);
 
@@ -159,6 +166,7 @@ void Integrator::imgui() {
     }
 
     if (ImGui::CollapsingHeader("Rendering", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::DragFloat("Scaling", &this->scaling, 0.01f, 0.00000001, 10.0f);
         const std::vector<const char*> line_colormap_names = {
             "Constant Color",
             "MATLAB_bone",
@@ -702,8 +710,7 @@ bool Integrator::integrate() {
     }
 
     Constants constants;
-    constants.dataset_resolution = this->dataset->data->resolution;
-    constants.dataset_dimensions = this->dataset->data->dimensions_in_meters_and_seconds();
+    constants.dataset_dimensions = this->dataset->data->dimensions;
     constants.seed_dimensions = this->seed_spawn;
     constants.dt = this->delta_time;
     constants.total_step_count = this->integration->integration_steps;
