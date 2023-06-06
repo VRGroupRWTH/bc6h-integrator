@@ -149,8 +149,15 @@ void Application::imgui() {
                     this->unload = true;
                 }
             } else {
-                if (ImGui::Button("Load")) {
+                if (ImGui::Button("Load File")) {
                     this->file_dialog.Open();
+                }
+
+                if (ImGui::Button("Load Analytic")) {
+                    this->dataset = Dataset::make(this->engine.device, DataSource::open_analytic());
+
+                    this->view->set_dataset(this->dataset);
+                    this->integrator->set_dataset(this->dataset);
                 }
             }
         }

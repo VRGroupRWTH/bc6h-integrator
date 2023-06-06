@@ -19,10 +19,11 @@ add_executable(
   src/integrator.hpp src/integrator.cpp
   src/data_source.hpp src/data_source.cpp
   src/dataset_view.hpp src/dataset_view.cpp
-  src/integration.glsl src/integrate_raw.comp src/integrate_bc6h.comp
-  src/dataset_view.vert src/dataset_view.frag
+  src/integration.glsl src/integrate_raw.comp src/integrate_bc6h.comp src/integrate_analytic.comp
+  src/dataset_view.vert src/dataset_view.glsl src/dataset_view_image.frag src/dataset_view_analytic.frag
   src/lines.vert src/lines.frag
   src/seeding.comp
+  src/analytic_vector_field.glsl
 )
 
 target_compile_definitions(

@@ -249,12 +249,16 @@ bool Integrator::create_descriptor() {
         return false;
     }
 
+    std::vector<VkDescriptorPoolSize> descriptor_pool_size = {
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3}
+    };
+
+    if (this->dataset->data->channel_count > 0) {
+        descriptor_pool_size.push_back({VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_TIME_SLICES * this->dataset->data->channel_count});
+    }
+
     this->descriptor_pool = lava::descriptor::pool::make();
-    if (!descriptor_pool->create(device, {
-                                             {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_TIME_SLICES * this->dataset->data->channel_count},
-                                             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3},
-                                         },
-                                 1)) {
+    if (!descriptor_pool->create(device, descriptor_pool_size, 1)) {
         lava::log()->error("failed to create descriptor pool for integration");
         return false;
     }
@@ -431,7 +435,10 @@ bool Integrator::create_integration_pipeline() {
     this->integration_pipeline->set_layout(this->integration_pipeline_layout);
 
     const lava::cdata* shader;
-    if (this->dataset->data->channel_count == 1) {
+    if (this->dataset->data->channel_count == 0) {
+        lava::log()->debug("analytic dataset");
+        shader = &integrate_analytic_comp_cdata;
+    } else if (this->dataset->data->channel_count == 1) {
         lava::log()->debug("bc6h texture dataset");
         shader = &integrate_bc6h_comp_cdata;
     } else if (this->dataset->data->channel_count == 3) {

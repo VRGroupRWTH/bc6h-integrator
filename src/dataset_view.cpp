@@ -9,9 +9,11 @@
 #include <vulkan/vulkan_core.h>
 
 struct Constants {
+    glm::vec2 resolution; //Resolution in cells / meter
     float minimum;
     float difference;
     float depth;
+    float time;
     std::uint32_t channel_count;
 };
 
@@ -22,6 +24,7 @@ DatasetView::~DatasetView() { destroy(); }
 
 bool DatasetView::create(lava::app& app) {
     this->device = app.device;
+    this->render_pass = app.shading.get_pass();
     auto render_target = app.target;
 
     this->quad = lava::create_mesh(this->device, lava::mesh_type::quad);
@@ -70,16 +73,42 @@ bool DatasetView::create(lava::app& app) {
         destroy();
         return false;
     }
-    if (!this->pipeline->add_shader(dataset_view_frag_cdata, VK_SHADER_STAGE_FRAGMENT_BIT)) {
+    if (!this->pipeline->add_shader(dataset_view_image_frag_cdata, VK_SHADER_STAGE_FRAGMENT_BIT)) {
         lava::log()->error("cannot add fragment shader for dataset view");
         destroy();
         return false;
     }
     this->pipeline->create(app.shading.get_vk_pass());
-    this->render_pass = app.shading.get_pass();
-    this->render_pass->add_front(this->pipeline);
-
     this->pipeline->on_process = [this](VkCommandBuffer command_buffer) { this->render(command_buffer); };
+
+    this->analytic_pipeline_layout = lava::pipeline_layout::make();
+    this->analytic_pipeline_layout->add_push_constant_range({VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(Constants)});
+    if (!analytic_pipeline_layout->create(this->device)) {
+        destroy();
+        return false;
+    }
+
+    this->analytic_pipeline = lava::render_pipeline::make(this->device, app.pipeline_cache);
+    this->analytic_pipeline->set_layout(this->analytic_pipeline_layout);
+    this->analytic_pipeline->add_color_blend_attachment();
+    this->analytic_pipeline->set_vertex_input_binding({0, sizeof(lava::vertex), VK_VERTEX_INPUT_RATE_VERTEX});
+    this->analytic_pipeline->set_vertex_input_attributes({
+        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, lava::to_ui32(offsetof(lava::vertex, position))},
+        {1, 0, VK_FORMAT_R32G32_SFLOAT, lava::to_ui32(offsetof(lava::vertex, uv))},
+    });
+
+    if (!this->analytic_pipeline->add_shader(dataset_view_vert_cdata, VK_SHADER_STAGE_VERTEX_BIT)) {
+        lava::log()->error("cannot add vertex shader for dataset view");
+        destroy();
+        return false;
+    }
+    if (!this->analytic_pipeline->add_shader(dataset_view_analytic_frag_cdata, VK_SHADER_STAGE_FRAGMENT_BIT)) {
+        lava::log()->error("cannot add fragment shader for dataset view");
+        destroy();
+        return false;
+    }
+    this->analytic_pipeline->create(app.shading.get_vk_pass());
+    this->analytic_pipeline->on_process = [this](VkCommandBuffer command_buffer) { this->render(command_buffer); };
 
     return true;
 }
@@ -117,14 +146,31 @@ void DatasetView::render(VkCommandBuffer command_buffer) {
         }
 
         Constants c{
+            .resolution = glm::vec2(this->dataset->data->resolution),
             .minimum = this->min,
             .difference = this->max - this->min,
-            .depth = static_cast<float>(this->z_slice - 1) / (this->dataset->data->dimensions.z - 1),
             .channel_count = this->dataset->data->channel_count,
         };
 
-        this->pipeline_layout->bind(command_buffer, this->descriptor_sets[this->t_slice - 1]);
-        vkCmdPushConstants(command_buffer, this->pipeline_layout->get(), VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(Constants), &c);
+        if (this->dataset->data->format != DataSource::Format::Analytic) {
+            c.depth = static_cast<float>(this->z_slice - 1) / (this->dataset->data->dimensions.z - 1);
+            c.time = static_cast<float>(this->t_slice - 1) / (this->dataset->data->dimensions.w - 1);
+        }
+
+        else {
+            c.depth = this->z_slice * this->dataset->data->dimensions_in_meters().z;
+            c.time = this->t_slice * this->dataset->data->time_in_seconds();
+        }
+
+        if (this->dataset->data->format != DataSource::Format::Analytic) {
+            this->pipeline_layout->bind(command_buffer, this->descriptor_sets[this->t_slice - 1]);    
+            vkCmdPushConstants(command_buffer, this->pipeline_layout->get(), VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(Constants), &c);
+        }
+
+        else {
+            vkCmdPushConstants(command_buffer, this->analytic_pipeline_layout->get(), VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(Constants), &c);
+        }
+        
         this->quad->bind_draw(command_buffer);
     }
 }
@@ -141,6 +187,17 @@ void DatasetView::imgui() {
 void DatasetView::set_dataset(Dataset::Ptr dataset) {
     this->dataset = dataset;
     this->free_descriptor_sets();
+
+    this->render_pass->remove(this->pipeline);
+    this->render_pass->remove(this->analytic_pipeline);
+
+    if (dataset->data->format != DataSource::Format::Analytic) {
+        this->render_pass->add_front(this->pipeline);
+    }
+
+    else {
+        this->render_pass->add_front(this->analytic_pipeline);   
+    }
 }
 
 void DatasetView::allocate_descriptor_sets() {
