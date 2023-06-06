@@ -138,10 +138,16 @@ void Integrator::imgui() {
     ImGui::DragInt("Batch Size", reinterpret_cast<int*>(&this->batch_size));
     ImGui::DragFloat("Delta Time", &this->delta_time, 0.001f, 0.0f);
 
-    if (ImGui::Checkbox("Explicit Interpolation", &this->explicit_interpolation)) {
+    if (ImGui::Checkbox("Analytic Dataset", &this->analytic_dataset)) {
         this->recreate_integration_pipeline = true;
     }
 
+    if (!this->analytic_dataset) {
+        if (ImGui::Checkbox("Explicit Interpolation", &this->explicit_interpolation)) {
+            this->recreate_integration_pipeline = true;
+        }
+    }
+    
     ImGui::BeginDisabled(!this->dataset || this->integration_in_progress());
     if (ImGui::Button("Integrate")) {
         this->should_integrate = true;
@@ -439,7 +445,10 @@ bool Integrator::create_integration_pipeline() {
     this->integration_pipeline->set_layout(this->integration_pipeline_layout);
 
     const lava::cdata* shader;
-    if (this->dataset->data->channel_count == 1) {
+    if (this->analytic_dataset) {
+        lava::log()->debug("analytic dataset");
+        shader = &integrate_analytic_comp_cdata;
+    } else if (this->dataset->data->channel_count == 1) {
         lava::log()->debug("bc6h texture dataset");
         shader = &integrate_bc6h_comp_cdata;
     } else if (this->dataset->data->channel_count == 3) {

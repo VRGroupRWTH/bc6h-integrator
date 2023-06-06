@@ -40,6 +40,8 @@ layout(set = 0, binding = 4) uniform sampler3D dataset_y[TIME_STEPS];
 layout(set = 0, binding = 5) uniform sampler3D dataset_z[TIME_STEPS];
 #elif defined(DATA_BC6H_TEXTURE)
 layout(set = 0, binding = 3) uniform sampler3D dataset[TIME_STEPS];
+#elif defined(DATA_ANALYTIC)
+#include "analytic_vector_field.glsl"
 #else
 #error "define something"
 #endif
@@ -157,6 +159,10 @@ vec3 sample_dataset(vec4 coordinates) {
             sampler_index - sampler_index_floored
         );
     }
+}
+#elif defined(DATA_ANALYTIC)
+vec3 sample_dataset(vec4 coordinates) {
+    return analytic_vector_field(coordinates);
 }
 #else
 #error "define something"
