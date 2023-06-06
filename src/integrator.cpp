@@ -109,6 +109,7 @@ void Integrator::set_dataset(Dataset::Ptr dataset) {
 
         const auto dimensions = this->dataset->data->dimensions;
         this->scaling = 1.0f / std::max(dimensions.x, std::max(dimensions.y, dimensions.z));
+        this->delta_time = (float)this->dataset->data->dimensions.w / (float)this->integration_steps;
     }
 }
 
@@ -136,7 +137,7 @@ void Integrator::imgui() {
     ImGui::DragInt3("Seed Dimensions", reinterpret_cast<int*>(glm::value_ptr(this->seed_spawn)));
     if (ImGui::DragInt("Steps", reinterpret_cast<int*>(&this->integration_steps))) {
         if (this->dataset) {
-            this->delta_time = 1.0f / this->dataset->data->dimensions.w;
+            this->delta_time = (float)this->dataset->data->dimensions.w / (float)this->integration_steps;
         }
     }
     ImGui::DragInt("Batch Size", reinterpret_cast<int*>(&this->batch_size));
