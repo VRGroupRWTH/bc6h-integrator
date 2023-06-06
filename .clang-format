@@ -1,7 +1,7 @@
 ---
 IndentWidth: 4
 ColumnLimit: 0
-#AlignAfterOpenBracket: BlockIndent
+AlignAfterOpenBracket: BlockIndent
 AllowShortFunctionsOnASingleLine: All
 IndentCaseLabels: true
 ---
