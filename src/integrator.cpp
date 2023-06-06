@@ -75,8 +75,9 @@ void Integrator::render(VkCommandBuffer command_buffer) {
 
     this->render_pipeline->bind(command_buffer);
     const VkDeviceSize buffer_offsets = 0;
-    // const glm::vec3 offset = -this->dataset->data->dimensions_in_meters() * 0.5f;
-    const glm::mat4 world = glm::scale(glm::mat4(1.0f), glm::vec3(this->scaling));
+    const glm::mat4 translation = glm::translate(glm::mat4(1.0f), -0.5f * glm::vec3(this->dataset->data->dimensions));
+    const glm::mat4 scaling = glm::scale(glm::mat4(1.0f), glm::vec3(this->scaling));
+    const glm::mat4 world = scaling * translation;
     const glm::mat4 view_projection = this->app->camera.get_view_projection();
     const glm::mat4 world_view_projection = view_projection * world;
     this->device->call().vkCmdSetLineWidth(command_buffer, this->line_width);
