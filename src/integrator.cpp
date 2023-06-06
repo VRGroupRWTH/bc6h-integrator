@@ -747,7 +747,7 @@ bool Integrator::integrate() {
 bool Integrator::perform_seeding(VkCommandBuffer command_buffer, VkFence fence, lava::timer& timer, Constants& constants) {
     lava::log()->debug("start seeding");
 
-    bool result = this->submit_and_measure_command(command_buffer, fence, timer, [=]() {
+    bool result = this->submit_and_measure_command(command_buffer, fence, timer, [=, this]() {
         this->seeding_pipeline->bind(command_buffer);
         this->seeding_pipeline_layout->bind(command_buffer, this->descriptor_set, 0, {}, VK_PIPELINE_BIND_POINT_COMPUTE);
 
@@ -770,7 +770,7 @@ bool Integrator::perform_integration(VkCommandBuffer command_buffer, VkFence fen
 
         lava::log()->debug("batch (first_step = {}, step_count = {})", constants.first_step, constants.step_count);
 
-        bool result = this->submit_and_measure_command(command_buffer, fence, timer, [=]() {
+        bool result = this->submit_and_measure_command(command_buffer, fence, timer, [=, this]() {
             this->integration_pipeline->bind(command_buffer);
             this->integration_pipeline_layout->bind(command_buffer, this->descriptor_set, 0, {}, VK_PIPELINE_BIND_POINT_COMPUTE);
 

@@ -53,15 +53,15 @@ bool Dataset::Image::create(lava::device_p device, const DataSource::Ptr& data, 
     const VkImageCreateInfo image_create_info{
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
         .flags = 0,
-        .imageType = VK_IMAGE_TYPE_3D,
+        .imageType = data->format == DataSource::Format::BC6H ? VK_IMAGE_TYPE_2D : VK_IMAGE_TYPE_3D,
         .format = format,
         .extent = VkExtent3D{
             .width = data->dimensions.x,
             .height = data->dimensions.y,
-            .depth = data->dimensions.z,
+            .depth = data->format == DataSource::Format::BC6H ? 1 : data->dimensions.z,
         },
         .mipLevels = 1,
-        .arrayLayers = 1,
+        .arrayLayers = data->format == DataSource::Format::BC6H ? data->dimensions.z : 1,
         .samples = VK_SAMPLE_COUNT_1_BIT,
         .tiling = VK_IMAGE_TILING_OPTIMAL,
         .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -86,14 +86,14 @@ bool Dataset::Image::create(lava::device_p device, const DataSource::Ptr& data, 
     const VkImageViewCreateInfo image_view_info{
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
         .image = this->image,
-        .viewType = VK_IMAGE_VIEW_TYPE_3D,
+        .viewType = data->format == DataSource::Format::BC6H ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_3D,
         .format = format,
         .subresourceRange = {
             .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
             .baseMipLevel = 0,
             .levelCount = 1,
             .baseArrayLayer = 0,
-            .layerCount = 1,
+            .layerCount = data->format == DataSource::Format::BC6H ? data->dimensions.z : 1,
         },
     };
 
@@ -375,7 +375,7 @@ void Dataset::load(std::size_t staging_buffer_count) {
                         .baseMipLevel = 0,
                         .levelCount = 1,
                         .baseArrayLayer = 0,
-                        .layerCount = 1,
+                        .layerCount = data->format == DataSource::Format::BC6H ? data->dimensions.z : 1,
                     },
                 };
                 vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
@@ -389,7 +389,7 @@ void Dataset::load(std::size_t staging_buffer_count) {
                     .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                     .mipLevel = 0,
                     .baseArrayLayer = 0,
-                    .layerCount = 1,
+                    .layerCount = data->format == DataSource::Format::BC6H ? data->dimensions.z : 1,
                 },
                 .imageOffset = VkOffset3D{
                     .x = 0,
@@ -399,7 +399,7 @@ void Dataset::load(std::size_t staging_buffer_count) {
                 .imageExtent = VkExtent3D{
                     .width = data->dimensions.x,
                     .height = data->dimensions.y,
-                    .depth = data->dimensions.z,
+                    .depth = data->format == DataSource::Format::BC6H ? 1 : data->dimensions.z,
                 },
             };
 
@@ -504,7 +504,7 @@ void Dataset::transition_images(VkCommandBuffer command_buffer) {
                 .baseMipLevel = 0,
                 .levelCount = 1,
                 .baseArrayLayer = 0,
-                .layerCount = 1,
+                .layerCount = data->format == DataSource::Format::BC6H ? data->dimensions.z : 1,
             },
         };
         vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);

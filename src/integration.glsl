@@ -39,7 +39,7 @@ layout(set = 0, binding = 3) uniform sampler3D dataset_x[TIME_STEPS];
 layout(set = 0, binding = 4) uniform sampler3D dataset_y[TIME_STEPS];
 layout(set = 0, binding = 5) uniform sampler3D dataset_z[TIME_STEPS];
 #elif defined(DATA_BC6H_TEXTURE)
-layout(set = 0, binding = 3) uniform sampler3D dataset[TIME_STEPS];
+layout(set = 0, binding = 3) uniform sampler2DArray dataset[TIME_STEPS];
 #else
 #error "define something"
 #endif
@@ -110,7 +110,7 @@ vec3 sample_dataset(vec4 coordinates) {
     }
 }
 #elif defined(DATA_BC6H_TEXTURE)
-vec3 sample_explicit(sampler3D dataset_sampler, vec3 coordinates) {
+vec3 sample_explicit(sampler2DArray dataset_sampler, vec3 coordinates) {
     vec3 base_coordinate = floor(coordinates - vec3(0.5));
     vec3 filter_weight = coordinates - (base_coordinate + vec3(0.5));
 
@@ -150,7 +150,7 @@ vec3 sample_dataset(vec4 coordinates) {
     }
 
     else {
-        const vec3 texture_coordinates = coordinates.xyz / constants.dataset_dimensions.xyz;
+        const vec3 texture_coordinates = vec3(coordinates.xy / constants.dataset_dimensions.xy, coordinates.z);
         return mix(
             texture(dataset[sampler_index_floored], texture_coordinates).xyz,
             texture(dataset[sampler_index_ceiled], texture_coordinates).xyz,
