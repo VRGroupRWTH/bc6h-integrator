@@ -19,7 +19,7 @@ struct Constants {
 };
 
 constexpr std::uint32_t LINE_BUFFER_BINDING = 0;
-constexpr std::uint32_t PROGRESS_BUFFER_BINDING = 1;
+constexpr std::uint32_t MAX_VELOCITY_MAGNITUDE_BUFFER_BINDING = 1;
 constexpr std::uint32_t INDIRECT_BUFFER_BINDING = 2;
 constexpr std::uint32_t DATASET_BINDING_BASE = 3;
 constexpr std::uint32_t WORK_GROUP_SIZE_X_CONSTANT_ID = 0;
@@ -40,7 +40,7 @@ bool Integrator::create(lava::app& app) {
 
     return this->create_command_pool() &&
            this->create_query_pool() &&
-           this->create_progress_buffer();
+           this->create_max_velocity_magnitude_buffer();
 
     return true;
 }
@@ -60,9 +60,9 @@ void Integrator::destroy() {
         this->device->call().vkDestroyQueryPool(this->device->get(), this->query_pool, nullptr);
         this->query_pool = VK_NULL_HANDLE;
     }
-    if (this->progress_buffer) {
-        this->progress_buffer->destroy();
-        this->progress_buffer = nullptr;
+    if (this->max_velocity_magnitude_buffer) {
+        this->max_velocity_magnitude_buffer->destroy();
+        this->max_velocity_magnitude_buffer = nullptr;
     }
 }
 
@@ -70,6 +70,8 @@ void Integrator::render(VkCommandBuffer command_buffer) {
     if (!this->integration.has_value()) {
         return;
     }
+
+    const VkBool32 invert_colormap = this->line_colormap_invert;
 
     this->render_pipeline->bind(command_buffer);
     const VkDeviceSize buffer_offsets = 0;
@@ -80,6 +82,11 @@ void Integrator::render(VkCommandBuffer command_buffer) {
     this->device->call().vkCmdSetLineWidth(command_buffer, this->line_width);
     this->device->call().vkCmdPushConstants(command_buffer, this->render_pipeline_layout->get(), VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(world_view_projection), &world_view_projection);
     this->device->call().vkCmdPushConstants(command_buffer, this->render_pipeline_layout->get(), VK_SHADER_STAGE_FRAGMENT_BIT, 16 * 4, sizeof(this->line_color), glm::value_ptr(line_color));
+    this->device->call().vkCmdPushConstants(command_buffer, this->render_pipeline_layout->get(), VK_SHADER_STAGE_FRAGMENT_BIT, 20 * 4, sizeof(this->line_colormap), &this->line_colormap);
+    this->device->call().vkCmdPushConstants(command_buffer, this->render_pipeline_layout->get(), VK_SHADER_STAGE_FRAGMENT_BIT, 20 * 4, sizeof(this->line_colormap), &this->line_colormap);
+    this->device->call().vkCmdPushConstants(command_buffer, this->render_pipeline_layout->get(), VK_SHADER_STAGE_FRAGMENT_BIT, 21 * 4, sizeof(invert_colormap), &invert_colormap);
+    this->device->call().vkCmdPushConstants(command_buffer, this->render_pipeline_layout->get(), VK_SHADER_STAGE_FRAGMENT_BIT, 22 * 4, sizeof(this->line_velocity_min), &this->line_velocity_min);
+    this->device->call().vkCmdPushConstants(command_buffer, this->render_pipeline_layout->get(), VK_SHADER_STAGE_FRAGMENT_BIT, 23 * 4, sizeof(this->line_velocity_max), &this->line_velocity_max);
     this->device->call().vkCmdBindVertexBuffers(command_buffer, 0, 1, &this->integration->line_buffer, &buffer_offsets);
     this->device->call().vkCmdDrawIndirect(command_buffer, this->integration->indirect_buffer, 0, this->integration->seed_count, sizeof(VkDrawIndirectCommand));
 }
@@ -149,9 +156,9 @@ void Integrator::imgui() {
     ImGui::EndDisabled();
 
     if (this->integration_in_progress()) {
-        auto progress = reinterpret_cast<const std::uint32_t*>(this->progress_buffer->get_mapped_data());
-        lava::log()->debug("{}", *progress);
-        ImGui::ProgressBar(static_cast<float>(*progress) / (this->integration->seed_count * this->integration->integration_steps));
+        auto progress = float(this->integration->current_batch) / this->integration->batch_count;
+        // lava::log()->debug("{}", progress);
+        ImGui::ProgressBar(progress);
     }
     if (this->integration) {
         ImGui::Text("Duration: %f ms (CPU), %f ms (GPU)", this->integration->cpu_time, this->integration->gpu_time);
@@ -159,20 +166,46 @@ void Integrator::imgui() {
 
     if (ImGui::CollapsingHeader("Rendering", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::DragFloat("Scaling", &this->scaling, 0.01f, 0.00000001, 10.0f);
+        const std::vector<const char*> line_colormap_names = {
+            "Constant Color",
+            "MATLAB_bone",
+            "MATLAB_hot",
+            "MATLAB_jet",
+            "MATLAB_summer",
+            "IDL_Rainbow",
+            "IDL_Mac_Style",
+            "IDL_CB-YIGn",
+            "IDL_CB-YIGnBu",
+            "IDL_CB-RdBu",
+            "IDL_CB-RdYiGn",
+            "IDL_CB-Spectral",
+            "transform_rainbow"};
+
+        ImGui::Combo("Line Colormap", (int32_t*)&this->line_colormap, line_colormap_names.data(), line_colormap_names.size());
+
+        if (this->line_colormap == 0) {
+            ImGui::ColorEdit4("Line Color", glm::value_ptr(this->line_color));
+        }
+
+        else {
+            ImGui::Checkbox("Line Colormap Invert", &this->line_colormap_invert);
+            ImGui::DragFloat("Line Velocity Min", &this->line_velocity_min, 0.01f);
+            ImGui::DragFloat("Line Velocity Max", &this->line_velocity_max, 0.01f);
+        }
+
         ImGui::DragFloat("Line Width", &this->line_width, 0.025f, 0.1, 10.0f);
-        ImGui::ColorEdit4("Line Color", glm::value_ptr(this->line_color));
     }
 }
 
-bool Integrator::create_progress_buffer() {
-    this->progress_buffer = lava::buffer::make();
-    this->progress_buffer->create_mapped(this->device, nullptr, 4, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+bool Integrator::create_max_velocity_magnitude_buffer() {
+    this->max_velocity_magnitude_buffer = lava::buffer::make();
+    this->max_velocity_magnitude_buffer->create_mapped(this->device, nullptr, 4, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
-    if (this->progress_buffer->get_mapped_data() == nullptr) {
+    if (this->max_velocity_magnitude_buffer->get_mapped_data() == nullptr) {
         lava::log()->error("failed to map data of progress buffer");
         return false;
     }
-    memset(this->progress_buffer->get_mapped_data(), 0, 4);
+    memset(this->max_velocity_magnitude_buffer->get_mapped_data(), 0, 4);
 
     return true;
 }
@@ -235,18 +268,18 @@ bool Integrator::create_descriptor() {
 
     this->descriptor_set = this->descriptor->allocate(this->descriptor_pool->get());
 
-    const VkDescriptorBufferInfo progress_buffer_info{
-        .buffer = this->progress_buffer->get(),
+    const VkDescriptorBufferInfo max_velocity_magnitude_buffer_info{
+        .buffer = this->max_velocity_magnitude_buffer->get(),
         .offset = 0,
         .range = VK_WHOLE_SIZE,
     };
     this->device->vkUpdateDescriptorSets({{
         .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
         .dstSet = this->descriptor_set,
-        .dstBinding = PROGRESS_BUFFER_BINDING,
+        .dstBinding = MAX_VELOCITY_MAGNITUDE_BUFFER_BINDING,
         .descriptorCount = 1,
         .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-        .pBufferInfo = &progress_buffer_info,
+        .pBufferInfo = &max_velocity_magnitude_buffer_info,
     }});
 
     return true;
@@ -270,7 +303,7 @@ void Integrator::destroy_descriptor() {
 bool Integrator::create_render_pipeline() {
     this->render_pipeline_layout = lava::pipeline_layout::make();
     this->render_pipeline_layout->add_push_constant_range({VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4)});
-    this->render_pipeline_layout->add_push_constant_range({VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(glm::mat4), sizeof(glm::vec4)});
+    this->render_pipeline_layout->add_push_constant_range({VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(glm::mat4), sizeof(glm::vec4) + sizeof(uint32_t) + sizeof(VkBool32) + 2 * sizeof(float)});
     if (!render_pipeline_layout->create(device)) {
         destroy();
         return false;
@@ -686,8 +719,10 @@ bool Integrator::integrate() {
     this->integration->cpu_time = 0.0;
     this->integration->gpu_time = 0.0;
     this->integration->complete = false;
+    this->integration->batch_count = this->batch_size;
+    this->integration->current_batch = 0;
 
-    memset(this->progress_buffer->get_mapped_data(), 0, 4);
+    memset(this->max_velocity_magnitude_buffer->get_mapped_data(), 0, 4);
 
     lava::timer timer;
 
@@ -749,6 +784,7 @@ bool Integrator::perform_integration(VkCommandBuffer command_buffer, VkFence fen
         }
 
         step_count += constants.step_count;
+        this->integration->current_batch += 1;
     }
 
     lava::log()->debug("integration dispatched ({} ms)", timer.elapsed().count());
@@ -842,6 +878,7 @@ bool Integrator::submit_and_measure_command(VkCommandBuffer command_buffer, VkFe
     const double duration_ms = duration_ns / 1000.0 / 1000.0;
 
     this->integration->gpu_time += duration_ms;
+    this->line_velocity_max = *reinterpret_cast<const float*>(this->max_velocity_magnitude_buffer->get_mapped_data());
 
     return true;
 }

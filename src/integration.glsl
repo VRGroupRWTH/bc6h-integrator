@@ -11,8 +11,8 @@ layout(std140, set = 0, binding = 0) buffer line_buffer {
    vec4 vertices[];
 };
 
-layout(std140, set = 0, binding = 1) buffer progress_buffer {
-   uint progress;
+layout(std140, set = 0, binding = 1) buffer max_velocity_magnitude_buffer {
+   uint max_velocity_magnitude;
 };
 
 struct DrawIndirectCommand {
@@ -217,17 +217,20 @@ void main()
     for (uint s = 0; s < constants.step_count; ++s) {
         const vec4 sample_location = vec4(position, t);
         
-        if (any(lessThan(sample_location, vec4(0))) || any(greaterThan(sample_location, constants.dataset_dimensions))) {
-            atomicAdd(progress, constants.step_count - s);
+        if (any(lessThan(sample_location, vec4(0))) || any(greaterThanEqual(sample_location, constants.dataset_dimensions))) {
             break;
         }
 
-        const vec3 next_position = position + constants.dt * rungekutta4(sample_location);
-        vertices[line_buffer_offset + s + 1] = vec4(next_position, seed_id);
+        const vec3 velocity = rungekutta4(sample_location);
+        const float velocity_magnitude = length(velocity);
+
+        atomicMax(max_velocity_magnitude, floatBitsToUint(velocity_magnitude));
+
+        const vec3 next_position = position + constants.dt * velocity;
+        vertices[line_buffer_offset + s + 1] = vec4(next_position, velocity_magnitude);
         position = next_position;
         t += constants.dt;
 
         atomicAdd(indirect_draw[seed_id].vertex_count, 1);
-        atomicAdd(progress, 1);
     }
 }
