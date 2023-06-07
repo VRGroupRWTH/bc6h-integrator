@@ -44,11 +44,13 @@ bool Dataset::Image::create(lava::device_p device, const DataSource::Ptr& data, 
     const VkFormat format = get_vulkan_format(data->format);
 
     const auto& queues = this->device->get_queues();
-    std::array<std::uint32_t, 2> family_indices = {
+    std::vector<std::uint32_t> family_indices = {
         queues[queue_indices::GRAPHICS].family,
         queues[queue_indices::COMPUTE].family,
-        // queues[queue_indices::TRANSFER].family,
+        queues[queue_indices::TRANSFER].family,
     };
+    std::sort(family_indices.begin(), family_indices.end());
+    family_indices.erase(std::unique(family_indices.begin(), family_indices.end()), family_indices.end());
 
     Image time_slice;
     const VkImageCreateInfo image_create_info{
@@ -67,7 +69,7 @@ bool Dataset::Image::create(lava::device_p device, const DataSource::Ptr& data, 
         .tiling = VK_IMAGE_TILING_OPTIMAL,
         .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
         .sharingMode = VK_SHARING_MODE_CONCURRENT,
-        .queueFamilyIndexCount = family_indices.size(),
+        .queueFamilyIndexCount = static_cast<uint32_t>(family_indices.size()),
         .pQueueFamilyIndices = family_indices.data(),
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
     };
