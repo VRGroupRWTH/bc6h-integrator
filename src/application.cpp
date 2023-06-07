@@ -132,7 +132,7 @@ void Application::imgui() {
     if (ImGui::Begin("General")) {
         if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
             glm::vec3 background_color = this->engine.shading.get_pass()->get_clear_color();
-            if (ImGui::ColorEdit4("Background Color", glm::value_ptr(background_color))) {
+            if (ImGui::ColorEdit3("Background Color", glm::value_ptr(background_color))) {
                 this->engine.shading.get_pass()->set_clear_color(background_color);
             }
             ImGui::DragFloat3("Position", glm::value_ptr(this->engine.camera.position));
