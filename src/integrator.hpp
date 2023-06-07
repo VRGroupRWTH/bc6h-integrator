@@ -86,6 +86,9 @@ class Integrator {
     };
     std::optional<Integration> integration;
 
+    std::ofstream log_file;
+    unsigned int run;
+
     // Compute
     lava::buffer::ptr max_velocity_magnitude_buffer;
     lava::device_p device;
