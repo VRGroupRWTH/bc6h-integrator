@@ -7,6 +7,8 @@
 #include <glm/gtx/string_cast.hpp>
 #include <imgui.h>
 #include <liblava/app.hpp>
+#include <spdlog/fmt/bundled/core.h>
+#include <spdlog/fmt/bundled/ostream.h>
 #include <vulkan/vulkan_core.h>
 
 struct Constants {
@@ -97,6 +99,8 @@ void Integrator::render(VkCommandBuffer command_buffer) {
 }
 
 void Integrator::set_dataset(Dataset::Ptr dataset) {
+    this->log_file.close();
+    this->run = 0;
     this->destroy_integration();
     this->destroy_seeding_pipeline();
     this->destroy_integration_pipeline();
@@ -133,26 +137,36 @@ void Integrator::check_for_integration() {
 void Integrator::imgui() {
     if (ImGui::DragInt3("Work Group Size", reinterpret_cast<int*>(glm::value_ptr(this->work_group_size)))) {
         this->recreate_integration_pipeline = true;
+        this->log_file.close();
     }
-    ImGui::DragInt3("Seed Dimensions", reinterpret_cast<int*>(glm::value_ptr(this->seed_spawn)));
+    if (ImGui::DragInt3("Seed Dimensions", reinterpret_cast<int*>(glm::value_ptr(this->seed_spawn)))) {
+        this->log_file.close();
+    }
     if (ImGui::DragInt("Steps", reinterpret_cast<int*>(&this->integration_steps))) {
+        this->log_file.close();
         if (this->dataset) {
             this->delta_time = (float)this->dataset->data->dimensions.w / (float)this->integration_steps;
         }
     }
-    ImGui::DragInt("Batch Size", reinterpret_cast<int*>(&this->batch_size));
-    ImGui::DragFloat("Delta Time", &this->delta_time, 0.001f, 0.0f);
+    if (ImGui::DragInt("Batch Size", reinterpret_cast<int*>(&this->batch_size))) {
+        this->log_file.close();
+    }
+    if (ImGui::DragFloat("Delta Time", &this->delta_time, 0.001f, 0.0f)) {
+        this->log_file.close();
+    }
 
     if (ImGui::Checkbox("Analytic Dataset", &this->analytic_dataset)) {
         this->recreate_integration_pipeline = true;
+        this->log_file.close();
     }
 
     if (!this->analytic_dataset) {
         if (ImGui::Checkbox("Explicit Interpolation", &this->explicit_interpolation)) {
             this->recreate_integration_pipeline = true;
+            this->log_file.close();
         }
     }
-    
+
     ImGui::BeginDisabled(!this->dataset || this->integration_in_progress());
     if (ImGui::Button("Integrate")) {
         this->should_integrate = true;
@@ -584,8 +598,7 @@ bool Integrator::Integration::create_buffers(glm::uvec3 seed_spawn, std::uint32_
             &line_buffer_alloc_info,
             &this->line_buffer,
             &this->line_buffer_allocation,
-            nullptr
-        ) != VK_SUCCESS) {
+            nullptr) != VK_SUCCESS) {
         lava::log()->error("failed to create line buffer");
         return false;
     }
@@ -607,8 +620,7 @@ bool Integrator::Integration::create_buffers(glm::uvec3 seed_spawn, std::uint32_
             &indirect_buffer_alloc_info,
             &this->indirect_buffer,
             &this->indirect_buffer_allocation,
-            nullptr
-        ) != VK_SUCCESS) {
+            nullptr) != VK_SUCCESS) {
         lava::log()->error("failed to create indirect buffer");
         return false;
     }
@@ -695,6 +707,38 @@ bool Integrator::prepare_integration() {
 }
 
 bool Integrator::integrate() {
+    if (!this->log_file.is_open()) {
+        const auto absolute_dataset_path = std::filesystem::absolute(this->dataset->data->filename);
+        const auto dataset_filename = absolute_dataset_path.filename().string();
+        std::time_t t = std::time(0); // get time now
+        std::tm* now = std::localtime(&t);
+
+        std::array<std::string_view, 7> weekdays = {
+            "Sunday",
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+        };
+
+        const std::string filename = fmt::format("{}-{}-{}-{}-{}-{}-{}-{}-integration.csv", now->tm_year + 1900, now->tm_mon, now->tm_mday, weekdays[now->tm_wday], now->tm_hour, now->tm_min, now->tm_sec, dataset_filename);
+        this->log_file = std::ofstream(filename);
+        fmt::print(this->log_file, "run,compute_shader_duration,dataset_path,dataset_dimensions,work_group_size,seed_spawn,timestep,integration_steps,batch_size,explicit_interpolation,analytic\n");
+        fmt::print(
+            this->log_file, ",,{},{}x{}x{}x{},{}x{}x{},{}x{}x{},{},{},{},{},{}\n",
+            absolute_dataset_path,
+            this->dataset->data->dimensions.x, this->dataset->data->dimensions.y, this->dataset->data->dimensions.z, this->dataset->data->dimensions.w,
+            this->work_group_size.x, this->work_group_size.y, this->work_group_size.z,
+            this->seed_spawn.x, this->seed_spawn.y, this->seed_spawn.z,
+            this->delta_time,
+            this->integration_steps,
+            this->batch_size,
+            this->explicit_interpolation,
+            this->analytic_dataset);
+    }
+
     VkCommandBufferAllocateInfo command_buffer_info;
     command_buffer_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     command_buffer_info.pNext = nullptr;
@@ -754,6 +798,9 @@ bool Integrator::integrate() {
 
     vkFreeCommandBuffers(this->device->get(), this->command_pool, 1, &command_buffer);
     vkDestroyFence(this->device->get(), fence, lava::memory::instance().alloc());
+
+    this->log_file.flush();
+    this->run++;
 
     return true;
 }
@@ -891,6 +938,7 @@ bool Integrator::submit_and_measure_command(VkCommandBuffer command_buffer, VkFe
     const float timestamp_period = this->device->get_properties().limits.timestampPeriod;
     const double duration_ns = (timestamps[1] - timestamps[0]) * (double)timestamp_period;
     const double duration_ms = duration_ns / 1000.0 / 1000.0;
+    fmt::print(this->log_file, "{},{}\n", this->run, duration_ms);
 
     this->integration->gpu_time += duration_ms;
     this->line_velocity_max = *reinterpret_cast<const float*>(this->max_velocity_magnitude_buffer->get_mapped_data());

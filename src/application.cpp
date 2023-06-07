@@ -15,7 +15,7 @@ bool Application::setup() {
         device_param.features.multiDrawIndirect = true;
         // device_param.queue_family_infos[0].queues[0].priority = 1.0;
         device_param.add_queue(VK_QUEUE_COMPUTE_BIT, 1.0);
-        device_param.add_queue(VK_QUEUE_TRANSFER_BIT, 1.0);
+        device_param.add_queue(VK_QUEUE_TRANSFER_BIT | VK_QUEUE_COMPUTE_BIT, 1.0);
     };
 
     if (!this->engine.setup()) {
