@@ -35,6 +35,23 @@ Integrator::Integrator() {
 }
 
 bool Integrator::create(lava::app& app) {
+    if (!this->command_parser.parse_commands(app.get_cmd_line())) {
+        return false;
+    }
+
+    this->work_group_size.x = this->command_parser.get_work_group_size_x().value_or(this->work_group_size.x);
+    this->work_group_size.y = this->command_parser.get_work_group_size_y().value_or(this->work_group_size.y);
+    this->work_group_size.z = this->command_parser.get_work_group_size_z().value_or(this->work_group_size.z);
+    this->seed_spawn.x = this->command_parser.get_seed_dimensions_x().value_or(this->seed_spawn.x);
+    this->seed_spawn.y = this->command_parser.get_seed_dimensions_y().value_or(this->seed_spawn.y);
+    this->seed_spawn.z = this->command_parser.get_seed_dimensions_z().value_or(this->seed_spawn.z);
+    this->integration_steps = this->command_parser.get_integration_steps().value_or(this->integration_steps);
+    this->batch_size = this->command_parser.get_batch_size().value_or(this->batch_size);
+    this->delta_time = this->command_parser.get_delta_time().value_or(this->delta_time);
+    this->explicit_interpolation = this->command_parser.use_explicit_interpolation().value_or(this->explicit_interpolation);
+    this->analytic_dataset = this->command_parser.use_analytic_dataset().value_or(this->analytic_dataset);
+    this->repetitions_remaining = this->command_parser.get_repetition_count().value_or(0);
+
     const auto& queues = app.device->queues();
     this->compute_queue = queues[queue_indices::COMPUTE];
     this->device = app.device;
@@ -113,7 +130,14 @@ void Integrator::set_dataset(Dataset::Ptr dataset) {
 
         const auto dimensions = this->dataset->data->dimensions;
         this->scaling = 1.0f / std::max(dimensions.x, std::max(dimensions.y, dimensions.z));
-        this->delta_time = (float)this->dataset->data->dimensions.w / (float)this->integration_steps;
+
+        if (this->command_parser.get_delta_time().has_value()) {
+            this->delta_time = this->command_parser.get_delta_time().value();  
+        }
+
+        else {
+            this->delta_time = (float)this->dataset->data->dimensions.w / (float)this->integration_steps;
+        }
     }
 }
 
@@ -122,9 +146,34 @@ bool Integrator::integration_in_progress() {
     // this->device->vkWaitForFences(1, &this->integration->command_buffer_fence, true, 0).value == VK_TIMEOUT;
 }
 
-void Integrator::check_for_integration() {
-    if (this->should_integrate) {
+bool Integrator::check_for_integration() {
+    if (this->integration_in_progress() || !this->dataset) {
+        return true;
+    }
+
+    if (!this->dataset->loaded() || !this->dataset->transitioned) {
+        return true;
+    }
+
+    if (this->command_parser.get_repetition_count().has_value() && this->repetitions_remaining == 0) {
+        lava::log()->debug("final repetition complete closing application");
+
+        return false;
+    }
+
+    if (this->should_integrate || this->repetitions_remaining > 0) {
+        if (this->command_parser.get_repetition_delay().has_value()) {
+            float repetition_delay = this->command_parser.get_repetition_delay().value();
+
+            std::this_thread::sleep_for(std::chrono::milliseconds((uint32_t)repetition_delay));
+        }
+
         this->should_integrate = false;
+        
+        if (this->repetitions_remaining > 0) {
+            this->repetitions_remaining--;
+        }
+        
         if (this->prepare_integration()) {
             if (this->integration_thread.joinable()) {
                 this->integration_thread.join();
@@ -132,6 +181,8 @@ void Integrator::check_for_integration() {
             this->integration_thread = std::thread(&Integrator::integrate, this);
         }
     }
+
+    return true;
 }
 
 void Integrator::imgui() {
@@ -723,7 +774,15 @@ bool Integrator::integrate() {
             "Saturday",
         };
 
-        const std::string filename = fmt::format("{}-{}-{}-{}-{}-{}-{}-{}-integration.csv", now->tm_year + 1900, now->tm_mon, now->tm_mday, weekdays[now->tm_wday], now->tm_hour, now->tm_min, now->tm_sec, dataset_filename);
+        const std::string filename = fmt::format("{}-{}-{}-{}-{}-{}-{}-{}-({}-{}-{})-({}-{}-{})-{}-{}-{}-{}-{}-integration.csv", now->tm_year + 1900, now->tm_mon, now->tm_mday, weekdays[now->tm_wday], now->tm_hour, now->tm_min, now->tm_sec, dataset_filename,    
+            this->work_group_size.x, this->work_group_size.y, this->work_group_size.z,
+            this->seed_spawn.x, this->seed_spawn.y, this->seed_spawn.z,
+            this->integration_steps,
+            this->batch_size,
+            this->delta_time,
+            (this->explicit_interpolation) ? "Explicit" : "Implicit",
+            (this->analytic_dataset) ? "Analytic" : "Dataset"
+        );
         this->log_file = std::ofstream(filename);
         fmt::print(this->log_file, "run,compute_shader_duration,dataset_path,dataset_dimensions,work_group_size,seed_spawn,timestep,integration_steps,batch_size,explicit_interpolation,analytic\n");
         fmt::print(
