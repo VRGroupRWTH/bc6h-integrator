@@ -14,7 +14,23 @@ bench() {
 		for work_group_size_y in $work_group_sizes; do
 			for work_group_size_z in $work_group_sizes; do
 				if [[ `expr $work_group_size_x "*" $work_group_size_y "*" $work_group_size_z` -le 16 ]]; then
-					echo \
+					./build/Release/bc6h-integrator.exe \
+						$1 \
+						--work_group_size_x=$work_group_size_x \
+						--work_group_size_y=$work_group_size_y \
+						--work_group_size_z=$work_group_size_z \
+						--seed_dimension_x=$2 \
+						--seed_dimension_y=$3 \
+						--seed_dimension_z=$4 \
+						--integration_steps=$5 \
+						--batch_size=$5 \
+						--delta_time=$6 \
+						--repetition_delay=$repetition_delay \
+						--repetition_count=$repetition_count \
+						--explicit_interpolation
+
+					./build/Release/bc6h-integrator.exe \
+						$1 \
 						--work_group_size_x=$work_group_size_x \
 						--work_group_size_y=$work_group_size_y \
 						--work_group_size_z=$work_group_size_z \
