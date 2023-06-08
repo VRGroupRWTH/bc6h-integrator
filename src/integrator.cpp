@@ -643,16 +643,19 @@ bool Integrator::Integration::create_buffers(glm::uvec3 seed_spawn, std::uint32_
     const VmaAllocationCreateInfo line_buffer_alloc_info{
         .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
     };
+    VmaAllocationInfo allocation_info;
     if (vmaCreateBuffer(
             device->alloc(),
             &line_buffer_create_info,
             &line_buffer_alloc_info,
             &this->line_buffer,
             &this->line_buffer_allocation,
-            nullptr) != VK_SUCCESS) {
+            &allocation_info) != VK_SUCCESS) {
         lava::log()->error("failed to create line buffer");
         return false;
     }
+    lava::log()->debug("trajectory buffer size: {} MB", static_cast<double>(line_buffer_create_info.size) / 1024.0 / 1024.0);
+    lava::log()->debug("trajectory buffer memory type: {}", allocation_info.memoryType);
 
     const VkBufferCreateInfo indirect_buffer_create_info{
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,

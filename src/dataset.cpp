@@ -75,6 +75,7 @@ bool Dataset::Image::create(lava::device_p device, const DataSource::Ptr& data, 
     };
     const VmaAllocationCreateInfo allocation_create_info{
         .flags = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        .requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
     };
 
     VmaAllocationInfo allocation_info;
@@ -83,6 +84,7 @@ bool Dataset::Image::create(lava::device_p device, const DataSource::Ptr& data, 
         lava::log()->error("failed to create image for dataset");
         return false;
     }
+    lava::log()->debug("slice memory type: {}", allocation_info.memoryType);
     // lava::log()->info("allocated memory for slice t={}: {} bytes", t, allocation_info.size);
     // this->allocator = device->get_allocator()->get();
 
