@@ -787,9 +787,9 @@ bool Integrator::integrate() {
             (this->analytic_dataset) ? "Analytic" : "Dataset"
         );
         this->log_file = std::ofstream(filename);
-        fmt::print(this->log_file, "run,compute_shader_duration,dataset_path,dataset_dimensions,work_group_size,seed_spawn,timestep,integration_steps,batch_size,explicit_interpolation,analytic\n");
+        fmt::print(this->log_file, "run,seeding_gpu,seeding_cpu,integration_gpu,integration_cpu,dataset_path,dataset_dimensions,work_group_size,seed_spawn,timestep,integration_steps,batch_size,explicit_interpolation,analytic\n");
         fmt::print(
-            this->log_file, ",,{},{}x{}x{}x{},{}x{}x{},{}x{}x{},{},{},{},{},{}\n",
+            this->log_file, ",,,,,{},{}x{}x{}x{},{}x{}x{},{}x{}x{},{},{},{},{},{}\n",
             absolute_dataset_path,
             this->dataset->data->dimensions.x, this->dataset->data->dimensions.y, this->dataset->data->dimensions.z, this->dataset->data->dimensions.w,
             this->work_group_size.x, this->work_group_size.y, this->work_group_size.z,
@@ -847,13 +847,20 @@ bool Integrator::integrate() {
 
     lava::timer timer;
 
+    fmt::print(this->log_file, "{},", this->run);
+
+    lava::timer seeding_timer;
     if (!this->perform_seeding(command_buffer, fence, timer, constants)) {
         return false;
     }
+    fmt::print(this->log_file, "{},{},", this->integration->gpu_time, seeding_timer.elapsed().count());
+    this->integration->gpu_time = 0.0;
 
+    lava::timer integration_timer;
     if (!this->perform_integration(command_buffer, fence, timer, constants)) {
         return false;
     }
+    fmt::print(this->log_file, "{},{}\n", this->integration->gpu_time, integration_timer.elapsed().count());
 
     this->integration->cpu_time = timer.elapsed().count();
     this->integration->complete = true;
@@ -1000,7 +1007,6 @@ bool Integrator::submit_and_measure_command(VkCommandBuffer command_buffer, VkFe
     const float timestamp_period = this->device->get_properties().limits.timestampPeriod;
     const double duration_ns = (timestamps[1] - timestamps[0]) * (double)timestamp_period;
     const double duration_ms = duration_ns / 1000.0 / 1000.0;
-    fmt::print(this->log_file, "{},{}\n", this->run, duration_ms);
 
     this->integration->gpu_time += duration_ms;
     this->line_velocity_max = *reinterpret_cast<const float*>(this->max_velocity_magnitude_buffer->get_mapped_data());
