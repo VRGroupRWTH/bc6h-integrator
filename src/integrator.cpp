@@ -448,8 +448,8 @@ bool Integrator::create_seeding_pipeline() {
 
     std::array<uint32_t, 3> seeding_constants;
     seeding_constants[0] = this->work_group_size.x;
-    seeding_constants[1] = this->work_group_size.x;
-    seeding_constants[2] = this->work_group_size.x;
+    seeding_constants[1] = this->work_group_size.y;
+    seeding_constants[2] = this->work_group_size.z;
 
     VkSpecializationMapEntry workgroup_size_x;
     workgroup_size_x.constantID = WORK_GROUP_SIZE_X_CONSTANT_ID;
