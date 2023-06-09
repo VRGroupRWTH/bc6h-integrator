@@ -25,8 +25,8 @@ bench() {
 				fi
 
 				if [[ `expr $work_group_size_x "*" $work_group_size_y "*" $work_group_size_z` -le 16 ]]; then
-					echo "$1 ($work_group_size_x,$work_group_size_y,$work_group_size_z) explicit"
-					./build/Release/bc6h-integrator.exe \
+					printf "$1 ($work_group_size_x,$work_group_size_y,$work_group_size_z) explicit: "
+					if ./build/Release/bc6h-integrator.exe \
 						$1 \
 						--work_group_size_x=$work_group_size_x \
 						--work_group_size_y=$work_group_size_y \
@@ -39,10 +39,15 @@ bench() {
 						--delta_time=$6 \
 						--repetition_delay=$repetition_delay \
 						--repetition_count=$repetition_count \
-						--explicit_interpolation
+						--explicit_interpolation;
+					then
+						printf "SUCCESS\n"
+					else
+						printf "FAILED\n"
+					fi
 						
 					echo "$1 ($work_group_size_x,$work_group_size_y,$work_group_size_z) implicit"
-					./build/Release/bc6h-integrator.exe \
+					if ./build/Release/bc6h-integrator.exe \
 						$1 \
 						--work_group_size_x=$work_group_size_x \
 						--work_group_size_y=$work_group_size_y \
@@ -54,7 +59,12 @@ bench() {
 						--batch_size=$5 \
 						--delta_time=$6 \
 						--repetition_delay=$repetition_delay \
-						--repetition_count=$repetition_count
+						--repetition_count=$repetition_count;
+					then
+						printf "SUCCESS\n"
+					else
+						printf "FAILED\n"
+					fi
 				fi
 			done
 		done
@@ -65,14 +75,14 @@ bench() {
 bench "/c/datasets/abc_bc6h_highest.ktx" 25 25 15 15100 0.01
 bench "/c/datasets/abc_f16.raw" 25 25 15 15100 0.01
 bench "/c/datasets/abc_f32.raw" 25 25 15 15100 0.01
-bench "/c/datasets/abc_high_resolution_bc6h.raw" 25 25 15 15100 0.01
+bench "/c/datasets/abc_high_resolution_bc6h.raw" 25 25 15 12800 0.01
 
 # Halfcylinder
-bench "/c/datasets/halfcylinder_bc6h_highest.ktx" 25 25 12 20100 0.01
-bench "/c/datasets/halfcylinder_f16.raw" 25 25 12 20100 0.01
-bench "/c/datasets/halfcylinder_f32.raw" 25 25 12 20100 0.01
+bench "/c/datasets/halfcylinder_bc6h_highest.ktx" 25 25 12 15100 0.01
+bench "/c/datasets/halfcylinder_f16.raw" 25 25 12 15100 0.01
+bench "/c/datasets/halfcylinder_f32.raw" 25 25 12 15100 0.01
 
 # Tangaroa
-bench "/c/datasets/tangaroa_bc6h_highest.ktx" 20 25 15 15100 0.01
-bench "/c/datasets/tangaroa_f16.raw" 20 25 15 15100 0.01
-bench "/c/datasets/tangaroa_f32.raw" 20 25 15 15100 0.01
+bench "/c/datasets/tangaroa_bc6h_highest.ktx" 20 25 15 20100 0.01
+bench "/c/datasets/tangaroa_f16.raw" 20 25 15 20100 0.01
+bench "/c/datasets/tangaroa_f32.raw" 20 25 15 20100 0.01
