@@ -2,7 +2,6 @@ work_group_sizes="1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16"
 repetition_count=100
 repetition_delay=1000
 
-
 bench() {
 	# $1: dataset
 	# $2: seed dimension x
@@ -11,9 +10,22 @@ bench() {
 	# $5: steps
 	# $6: delta time
 	for work_group_size_x in $work_group_sizes; do
+		if [[ `expr $2 % $work_group_size_x` -ne 0 ]]; then
+			continue
+		fi
+
 		for work_group_size_y in $work_group_sizes; do
+			if [[ `expr $3 % $work_group_size_y` -ne 0 ]]; then
+				continue
+			fi
+
 			for work_group_size_z in $work_group_sizes; do
+				if [[ `expr $4 % $work_group_size_z` -ne 0 ]]; then
+					continue
+				fi
+
 				if [[ `expr $work_group_size_x "*" $work_group_size_y "*" $work_group_size_z` -le 16 ]]; then
+					echo "$1 ($work_group_size_x,$work_group_size_y,$work_group_size_z) explicit"
 					./build/Release/bc6h-integrator.exe \
 						$1 \
 						--work_group_size_x=$work_group_size_x \
@@ -28,7 +40,8 @@ bench() {
 						--repetition_delay=$repetition_delay \
 						--repetition_count=$repetition_count \
 						--explicit_interpolation
-
+						
+					echo "$1 ($work_group_size_x,$work_group_size_y,$work_group_size_z) implicit"
 					./build/Release/bc6h-integrator.exe \
 						$1 \
 						--work_group_size_x=$work_group_size_x \
