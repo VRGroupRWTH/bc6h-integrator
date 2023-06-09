@@ -65,14 +65,14 @@ bench() {
 bench "/c/datasets/abc_bc6h_highest.ktx" 25 25 15 15100 0.01
 bench "/c/datasets/abc_f16.raw" 25 25 15 15100 0.01
 bench "/c/datasets/abc_f32.raw" 25 25 15 15100 0.01
-bench "/c/datasets/abc_high_resolution_bc6h.raw" 25 25 15 15100 0.01
+bench "/c/datasets/abc_high_resolution_bc6h.raw" 25 25 15 12800 0.01
 
 # Halfcylinder
-bench "/c/datasets/halfcylinder_bc6h_highest.ktx" 25 25 12 20100 0.01
-bench "/c/datasets/halfcylinder_f16.raw" 25 25 12 20100 0.01
-bench "/c/datasets/halfcylinder_f32.raw" 25 25 12 20100 0.01
+bench "/c/datasets/halfcylinder_bc6h_highest.ktx" 25 25 12 15100 0.01
+bench "/c/datasets/halfcylinder_f16.raw" 25 25 12 15100 0.01
+bench "/c/datasets/halfcylinder_f32.raw" 25 25 12 15100 0.01
 
 # Tangaroa
-bench "/c/datasets/tangaroa_bc6h_highest.ktx" 20 25 15 15100 0.01
-bench "/c/datasets/tangaroa_f16.raw" 20 25 15 15100 0.01
-bench "/c/datasets/tangaroa_f32.raw" 20 25 15 15100 0.01
+bench "/c/datasets/tangaroa_bc6h_highest.ktx" 20 25 15 20100 0.01
+bench "/c/datasets/tangaroa_f16.raw" 20 25 15 20100 0.01
+bench "/c/datasets/tangaroa_f32.raw" 20 25 15 20100 0.01
