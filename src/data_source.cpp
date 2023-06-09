@@ -28,6 +28,12 @@ std::shared_ptr<DataSource> DataSource::open_raw_file(const std::filesystem::pat
     const std::streamsize data_size_f16 = channel_size_f16 * 3; // 3 = channel_count
     const auto expected_file_size_f16 = data_size_f16 + sizeof(glm::vec4);
 
+    const std::streamsize depth_slice_size_bc6h = ((dimensions.x + 3) / 4) *  ((dimensions.y + 3) / 4) * 16;
+    const std::streamsize time_slice_size_bc6h = depth_slice_size_bc6h * dimensions.z;
+    const std::streamsize channel_size_bc6h = time_slice_size_bc6h * dimensions.w;
+    const std::streamsize data_size_bc6h = channel_size_bc6h * 1; // 1 = channel_count
+    const auto expected_file_size_bc6h = data_size_bc6h + sizeof(glm::vec4);
+
     file.seekg(0, std::ios::end);
     const auto file_size = file.tellg();
 
@@ -56,8 +62,20 @@ std::shared_ptr<DataSource> DataSource::open_raw_file(const std::filesystem::pat
             .z_slice_size = depth_slice_size_f32,
             .channel_size = channel_size_f32,
         });
+    } else if (file_size == expected_file_size_bc6h) {
+        data_source = std::make_shared<DataSource>(DataSource{
+            .filename = path.string(),
+            .format = Format::BC6H,
+            .dimensions = dimensions,
+            .channel_count = 1,
+            .data_offset = sizeof(glm::uvec4),
+            .data_size = data_size_bc6h,
+            .time_slice_size = time_slice_size_bc6h,
+            .z_slice_size = depth_slice_size_bc6h,
+            .channel_size = channel_size_bc6h,
+        });
     } else {
-        lava::log()->error("file size mismatch: expected {} (Float16) or {} (Float32) bytes, got {} bytes", expected_file_size_f16, expected_file_size_f32, file_size);
+        lava::log()->error("file size mismatch: expected {} (Float16), {} (Float32) or {} (BC6H) bytes, got {} bytes", expected_file_size_f16, expected_file_size_f32, expected_file_size_bc6h, file_size);
         return nullptr;
     }
     lava::log()->info("raw dataset loaded (file: {}, dimensions: {}x{}x{}x{})", path.string(), dimensions.x, dimensions.y, dimensions.z, dimensions.w);

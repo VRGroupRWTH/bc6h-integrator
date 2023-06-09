@@ -51,8 +51,8 @@ bool Application::setup() {
         if (this->engine.camera.activated()) {
             this->engine.camera.update_view(dt, this->engine.input.get_mouse_position());
         }
-        this->integrator->check_for_integration();
-        return true;
+
+        return this->integrator->check_for_integration();
     };
 
     this->engine.on_process = [this](VkCommandBuffer command_buffer, lava::index frame) {

@@ -15,6 +15,7 @@ add_executable(
   bc6h-integrator
   src/main.cpp
   src/application.hpp src/application.cpp
+  src/command_parser.hpp src/command_parser.cpp
   src/dataset.hpp src/dataset.cpp
   src/integrator.hpp src/integrator.cpp
   src/data_source.hpp src/data_source.cpp
