@@ -25,8 +25,8 @@ bench() {
 				fi
 
 				if [[ `expr $work_group_size_x "*" $work_group_size_y "*" $work_group_size_z` -le 16 ]]; then
-					echo "$1 ($work_group_size_x,$work_group_size_y,$work_group_size_z) explicit"
-					./build/Release/bc6h-integrator.exe \
+					printf "$1 ($work_group_size_x,$work_group_size_y,$work_group_size_z) explicit: "
+					if ./build/Release/bc6h-integrator.exe \
 						$1 \
 						--work_group_size_x=$work_group_size_x \
 						--work_group_size_y=$work_group_size_y \
@@ -39,10 +39,15 @@ bench() {
 						--delta_time=$6 \
 						--repetition_delay=$repetition_delay \
 						--repetition_count=$repetition_count \
-						--explicit_interpolation
+						--explicit_interpolation;
+					then
+						printf "SUCCESS\n"
+					else
+						printf "FAILED\n"
+					fi
 						
 					echo "$1 ($work_group_size_x,$work_group_size_y,$work_group_size_z) implicit"
-					./build/Release/bc6h-integrator.exe \
+					if ./build/Release/bc6h-integrator.exe \
 						$1 \
 						--work_group_size_x=$work_group_size_x \
 						--work_group_size_y=$work_group_size_y \
@@ -54,7 +59,12 @@ bench() {
 						--batch_size=$5 \
 						--delta_time=$6 \
 						--repetition_delay=$repetition_delay \
-						--repetition_count=$repetition_count
+						--repetition_count=$repetition_count;
+					then
+						printf "SUCCESS\n"
+					else
+						printf "FAILED\n"
+					fi
 				fi
 			done
 		done
