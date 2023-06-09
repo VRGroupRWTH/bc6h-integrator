@@ -75,7 +75,7 @@ float sample_explicit(sampler3D dataset_sampler, vec3 coordinates) {
 }
 
 vec3 sample_dataset(vec4 coordinates) {
-    const float sampler_index = coordinates.w;
+    const float sampler_index = min(coordinates.w, constants.dataset_dimensions.w - 1.0);
     const int sampler_index_floored = int(floor(sampler_index));
     const int sampler_index_ceiled = int(ceil(sampler_index));
 
@@ -140,7 +140,7 @@ vec3 sample_explicit(sampler3D dataset_sampler, vec3 coordinates) {
 }
 
 vec3 sample_dataset(vec4 coordinates) {
-    const float sampler_index = coordinates.w;
+    const float sampler_index = min(coordinates.w, constants.dataset_dimensions.w - 1.0);
     const int sampler_index_floored = int(floor(sampler_index));
     const int sampler_index_ceiled = int(ceil(sampler_index));
 
