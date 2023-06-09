@@ -7,6 +7,8 @@
 #include <glm/gtx/string_cast.hpp>
 #include <imgui.h>
 #include <liblava/app.hpp>
+#include <spdlog/fmt/bundled/core.h>
+#include <spdlog/fmt/bundled/ostream.h>
 #include <vulkan/vulkan_core.h>
 
 struct Constants {
@@ -33,6 +35,23 @@ Integrator::Integrator() {
 }
 
 bool Integrator::create(lava::app& app) {
+    if (!this->command_parser.parse_commands(app.get_cmd_line())) {
+        return false;
+    }
+
+    this->work_group_size.x = this->command_parser.get_work_group_size_x().value_or(this->work_group_size.x);
+    this->work_group_size.y = this->command_parser.get_work_group_size_y().value_or(this->work_group_size.y);
+    this->work_group_size.z = this->command_parser.get_work_group_size_z().value_or(this->work_group_size.z);
+    this->seed_spawn.x = this->command_parser.get_seed_dimensions_x().value_or(this->seed_spawn.x);
+    this->seed_spawn.y = this->command_parser.get_seed_dimensions_y().value_or(this->seed_spawn.y);
+    this->seed_spawn.z = this->command_parser.get_seed_dimensions_z().value_or(this->seed_spawn.z);
+    this->integration_steps = this->command_parser.get_integration_steps().value_or(this->integration_steps);
+    this->batch_size = this->command_parser.get_batch_size().value_or(this->batch_size);
+    this->delta_time = this->command_parser.get_delta_time().value_or(this->delta_time);
+    this->explicit_interpolation = this->command_parser.use_explicit_interpolation().value_or(this->explicit_interpolation);
+    this->analytic_dataset = this->command_parser.use_analytic_dataset().value_or(this->analytic_dataset);
+    this->repetitions_remaining = this->command_parser.get_repetition_count().value_or(0);
+
     const auto& queues = app.device->queues();
     this->compute_queue = queues[queue_indices::COMPUTE];
     this->device = app.device;
@@ -46,6 +65,10 @@ bool Integrator::create(lava::app& app) {
 }
 
 void Integrator::destroy() {
+    if (this->integration_thread.joinable()) {
+        this->integration_thread.join();
+    }
+
     this->destroy_integration();
     this->destroy_render_pipeline();
     this->destroy_seeding_pipeline();
@@ -93,6 +116,8 @@ void Integrator::render(VkCommandBuffer command_buffer) {
 }
 
 void Integrator::set_dataset(Dataset::Ptr dataset) {
+    this->log_file.close();
+    this->run = 0;
     this->destroy_integration();
     this->destroy_seeding_pipeline();
     this->destroy_integration_pipeline();
@@ -105,6 +130,14 @@ void Integrator::set_dataset(Dataset::Ptr dataset) {
 
         const auto dimensions = this->dataset->data->dimensions;
         this->scaling = 1.0f / std::max(dimensions.x, std::max(dimensions.y, dimensions.z));
+
+        if (this->command_parser.get_delta_time().has_value()) {
+            this->delta_time = this->command_parser.get_delta_time().value();  
+        }
+
+        else {
+            this->delta_time = (float)this->dataset->data->dimensions.w / (float)this->integration_steps;
+        }
     }
 }
 
@@ -113,9 +146,34 @@ bool Integrator::integration_in_progress() {
     // this->device->vkWaitForFences(1, &this->integration->command_buffer_fence, true, 0).value == VK_TIMEOUT;
 }
 
-void Integrator::check_for_integration() {
-    if (this->should_integrate) {
+bool Integrator::check_for_integration() {
+    if (this->integration_in_progress() || !this->dataset) {
+        return true;
+    }
+
+    if (!this->dataset->loaded() || !this->dataset->transitioned) {
+        return true;
+    }
+
+    if (this->command_parser.get_repetition_count().has_value() && this->repetitions_remaining == 0) {
+        lava::log()->debug("final repetition complete closing application");
+
+        return false;
+    }
+
+    if (this->should_integrate || this->repetitions_remaining > 0) {
+        if (this->command_parser.get_repetition_delay().has_value()) {
+            float repetition_delay = this->command_parser.get_repetition_delay().value();
+
+            std::this_thread::sleep_for(std::chrono::milliseconds((uint32_t)repetition_delay));
+        }
+
         this->should_integrate = false;
+        
+        if (this->repetitions_remaining > 0) {
+            this->repetitions_remaining--;
+        }
+        
         if (this->prepare_integration()) {
             if (this->integration_thread.joinable()) {
                 this->integration_thread.join();
@@ -123,23 +181,41 @@ void Integrator::check_for_integration() {
             this->integration_thread = std::thread(&Integrator::integrate, this);
         }
     }
+
+    return true;
 }
 
 void Integrator::imgui() {
     if (ImGui::DragInt3("Work Group Size", reinterpret_cast<int*>(glm::value_ptr(this->work_group_size)))) {
         this->recreate_integration_pipeline = true;
+        this->log_file.close();
     }
-    ImGui::DragInt3("Seed Dimensions", reinterpret_cast<int*>(glm::value_ptr(this->seed_spawn)));
+    if (ImGui::DragInt3("Seed Dimensions", reinterpret_cast<int*>(glm::value_ptr(this->seed_spawn)))) {
+        this->log_file.close();
+    }
     if (ImGui::DragInt("Steps", reinterpret_cast<int*>(&this->integration_steps))) {
+        this->log_file.close();
         if (this->dataset) {
-            this->delta_time = 1.0f / this->dataset->data->dimensions.w;
+            this->delta_time = (float)this->dataset->data->dimensions.w / (float)this->integration_steps;
         }
     }
-    ImGui::DragInt("Batch Size", reinterpret_cast<int*>(&this->batch_size));
-    ImGui::DragFloat("Delta Time", &this->delta_time, 0.001f, 0.0f);
+    if (ImGui::DragInt("Batch Size", reinterpret_cast<int*>(&this->batch_size))) {
+        this->log_file.close();
+    }
+    if (ImGui::DragFloat("Delta Time", &this->delta_time, 0.001f, 0.0f)) {
+        this->log_file.close();
+    }
 
-    if (ImGui::Checkbox("Explicit Interpolation", &this->explicit_interpolation)) {
+    if (ImGui::Checkbox("Analytic Dataset", &this->analytic_dataset)) {
         this->recreate_integration_pipeline = true;
+        this->log_file.close();
+    }
+
+    if (!this->analytic_dataset) {
+        if (ImGui::Checkbox("Explicit Interpolation", &this->explicit_interpolation)) {
+            this->recreate_integration_pipeline = true;
+            this->log_file.close();
+        }
     }
 
     ImGui::BeginDisabled(!this->dataset || this->integration_in_progress());
@@ -372,8 +448,8 @@ bool Integrator::create_seeding_pipeline() {
 
     std::array<uint32_t, 3> seeding_constants;
     seeding_constants[0] = this->work_group_size.x;
-    seeding_constants[1] = this->work_group_size.x;
-    seeding_constants[2] = this->work_group_size.x;
+    seeding_constants[1] = this->work_group_size.y;
+    seeding_constants[2] = this->work_group_size.z;
 
     VkSpecializationMapEntry workgroup_size_x;
     workgroup_size_x.constantID = WORK_GROUP_SIZE_X_CONSTANT_ID;
@@ -439,7 +515,10 @@ bool Integrator::create_integration_pipeline() {
     this->integration_pipeline->set_layout(this->integration_pipeline_layout);
 
     const lava::cdata* shader;
-    if (this->dataset->data->channel_count == 1) {
+    if (this->analytic_dataset) {
+        lava::log()->debug("analytic dataset");
+        shader = &integrate_analytic_comp_cdata;
+    } else if (this->dataset->data->channel_count == 1) {
         lava::log()->debug("bc6h texture dataset");
         shader = &integrate_bc6h_comp_cdata;
     } else if (this->dataset->data->channel_count == 3) {
@@ -564,17 +643,19 @@ bool Integrator::Integration::create_buffers(glm::uvec3 seed_spawn, std::uint32_
     const VmaAllocationCreateInfo line_buffer_alloc_info{
         .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
     };
+    VmaAllocationInfo allocation_info;
     if (vmaCreateBuffer(
             device->alloc(),
             &line_buffer_create_info,
             &line_buffer_alloc_info,
             &this->line_buffer,
             &this->line_buffer_allocation,
-            nullptr
-        ) != VK_SUCCESS) {
+            &allocation_info) != VK_SUCCESS) {
         lava::log()->error("failed to create line buffer");
         return false;
     }
+    lava::log()->debug("trajectory buffer size: {} MB", static_cast<double>(line_buffer_create_info.size) / 1024.0 / 1024.0);
+    lava::log()->debug("trajectory buffer memory type: {}", allocation_info.memoryType);
 
     const VkBufferCreateInfo indirect_buffer_create_info{
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -593,8 +674,7 @@ bool Integrator::Integration::create_buffers(glm::uvec3 seed_spawn, std::uint32_
             &indirect_buffer_alloc_info,
             &this->indirect_buffer,
             &this->indirect_buffer_allocation,
-            nullptr
-        ) != VK_SUCCESS) {
+            nullptr) != VK_SUCCESS) {
         lava::log()->error("failed to create indirect buffer");
         return false;
     }
@@ -681,6 +761,46 @@ bool Integrator::prepare_integration() {
 }
 
 bool Integrator::integrate() {
+    if (!this->log_file.is_open()) {
+        const auto absolute_dataset_path = std::filesystem::absolute(this->dataset->data->filename);
+        const auto dataset_filename = absolute_dataset_path.filename().string();
+        std::time_t t = std::time(0); // get time now
+        std::tm* now = std::localtime(&t);
+
+        std::array<std::string_view, 7> weekdays = {
+            "Sunday",
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+        };
+
+        const std::string filename = fmt::format("{}-{}-{}-{}-{}-{}-{}-{}-({}-{}-{})-({}-{}-{})-{}-{}-{}-{}-{}-integration.csv", now->tm_year + 1900, now->tm_mon, now->tm_mday, weekdays[now->tm_wday], now->tm_hour, now->tm_min, now->tm_sec, dataset_filename,    
+            this->work_group_size.x, this->work_group_size.y, this->work_group_size.z,
+            this->seed_spawn.x, this->seed_spawn.y, this->seed_spawn.z,
+            this->integration_steps,
+            this->batch_size,
+            this->delta_time,
+            (this->explicit_interpolation) ? "Explicit" : "Implicit",
+            (this->analytic_dataset) ? "Analytic" : "Dataset"
+        );
+        this->log_file = std::ofstream(filename);
+        fmt::print(this->log_file, "run,seeding_gpu,seeding_cpu,integration_gpu,integration_cpu,dataset_path,dataset_dimensions,work_group_size,seed_spawn,timestep,integration_steps,batch_size,explicit_interpolation,analytic\n");
+        fmt::print(
+            this->log_file, ",,,,,{},{}x{}x{}x{},{}x{}x{},{}x{}x{},{},{},{},{},{}\n",
+            absolute_dataset_path,
+            this->dataset->data->dimensions.x, this->dataset->data->dimensions.y, this->dataset->data->dimensions.z, this->dataset->data->dimensions.w,
+            this->work_group_size.x, this->work_group_size.y, this->work_group_size.z,
+            this->seed_spawn.x, this->seed_spawn.y, this->seed_spawn.z,
+            this->delta_time,
+            this->integration_steps,
+            this->batch_size,
+            this->explicit_interpolation,
+            this->analytic_dataset);
+    }
+
     VkCommandBufferAllocateInfo command_buffer_info;
     command_buffer_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     command_buffer_info.pNext = nullptr;
@@ -727,19 +847,29 @@ bool Integrator::integrate() {
 
     lava::timer timer;
 
+    fmt::print(this->log_file, "{},", this->run);
+
+    lava::timer seeding_timer;
     if (!this->perform_seeding(command_buffer, fence, timer, constants)) {
         return false;
     }
+    fmt::print(this->log_file, "{},{},", this->integration->gpu_time, seeding_timer.elapsed().count());
+    this->integration->gpu_time = 0.0;
 
+    lava::timer integration_timer;
     if (!this->perform_integration(command_buffer, fence, timer, constants)) {
         return false;
     }
+    fmt::print(this->log_file, "{},{}\n", this->integration->gpu_time, integration_timer.elapsed().count());
 
     this->integration->cpu_time = timer.elapsed().count();
     this->integration->complete = true;
 
     vkFreeCommandBuffers(this->device->get(), this->command_pool, 1, &command_buffer);
     vkDestroyFence(this->device->get(), fence, lava::memory::instance().alloc());
+
+    this->log_file.flush();
+    this->run++;
 
     return true;
 }

@@ -5,6 +5,7 @@
 #include <liblava/core/time.hpp>
 #include <liblava/resource/buffer.hpp>
 #include <liblava/util/log.hpp>
+#include <spdlog/fmt/ostr.h>
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan_core.h>
 
@@ -43,11 +44,13 @@ bool Dataset::Image::create(lava::device_p device, const DataSource::Ptr& data, 
     const VkFormat format = get_vulkan_format(data->format);
 
     const auto& queues = this->device->get_queues();
-    std::array<std::uint32_t, 3> family_indices = {
+    std::vector<std::uint32_t> family_indices = {
         queues[queue_indices::GRAPHICS].family,
         queues[queue_indices::COMPUTE].family,
         queues[queue_indices::TRANSFER].family,
     };
+    std::sort(family_indices.begin(), family_indices.end());
+    family_indices.erase(std::unique(family_indices.begin(), family_indices.end()), family_indices.end());
 
     Image time_slice;
     const VkImageCreateInfo image_create_info{
@@ -66,12 +69,13 @@ bool Dataset::Image::create(lava::device_p device, const DataSource::Ptr& data, 
         .tiling = VK_IMAGE_TILING_OPTIMAL,
         .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
         .sharingMode = VK_SHARING_MODE_CONCURRENT,
-        .queueFamilyIndexCount = family_indices.size(),
+        .queueFamilyIndexCount = static_cast<uint32_t>(family_indices.size()),
         .pQueueFamilyIndices = family_indices.data(),
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
     };
     const VmaAllocationCreateInfo allocation_create_info{
         .flags = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        .requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
     };
 
     VmaAllocationInfo allocation_info;
@@ -80,6 +84,7 @@ bool Dataset::Image::create(lava::device_p device, const DataSource::Ptr& data, 
         lava::log()->error("failed to create image for dataset");
         return false;
     }
+    lava::log()->debug("slice memory type: {}", allocation_info.memoryType);
     // lava::log()->info("allocated memory for slice t={}: {} bytes", t, allocation_info.size);
     // this->allocator = device->get_allocator()->get();
 
@@ -250,8 +255,7 @@ void Dataset::load(std::size_t staging_buffer_count) {
                     1,
                     &this->buffer,
                     &this->allocation,
-                    &this->allocation_info
-                ) != VK_SUCCESS) {
+                    &this->allocation_info) != VK_SUCCESS) {
                 lava::log()->error("failed to create staging buffer");
                 return false;
             }
@@ -267,6 +271,28 @@ void Dataset::load(std::size_t staging_buffer_count) {
         }
     };
 
+    const auto absolute_dataset_path = std::filesystem::absolute(this->data->filename);
+    const auto dataset_filename = absolute_dataset_path.filename().string();
+    std::time_t t = std::time(0); // get time now
+    std::tm* now = std::localtime(&t);
+
+    std::array<std::string_view, 7> weekdays = {
+        "Sunday",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+    };
+    const std::string filename = fmt::format("{}-{}-{}-{}-{}-{}-{}-{}-loading.csv", now->tm_year + 1900, now->tm_mon, now->tm_mday, weekdays[now->tm_wday], now->tm_hour, now->tm_min, now->tm_sec, dataset_filename);
+    std::ofstream log_file(filename);
+    fmt::print(log_file, "slice,file_read,texture_upload,dataset_path,dataset_dimensions\n");
+    fmt::print(
+        log_file, ",,,{},{}x{}x{}x{}\n",
+        absolute_dataset_path,
+        this->data->dimensions.x, this->data->dimensions.y, this->data->dimensions.z, this->data->dimensions.w);
+
     this->loading_state.write()->set_step(LoadingState::Step::STARTING);
     lava::timer loading_timer;
     this->loading_time.exchange(loading_timer.elapsed());
@@ -274,6 +300,22 @@ void Dataset::load(std::size_t staging_buffer_count) {
     std::vector<StagingBuffer> staging_buffers(staging_buffer_count);
     lava::VkCommandBuffers staging_command_buffers(staging_buffer_count);
     lava::VkFences staging_fences(staging_buffer_count);
+    std::vector<std::optional<std::size_t>> slice_loaded_by_staging_buffer(staging_buffer_count);
+    VkQueryPool query_pool;
+
+    {
+        VkQueryPoolCreateInfo query_pool_create{
+            .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+            .queryType = VK_QUERY_TYPE_TIMESTAMP,
+            .queryCount = static_cast<uint32_t>(2 * staging_buffer_count),
+
+        };
+        if (this->device->call().vkCreateQueryPool(this->device->get(), &query_pool_create, nullptr, &query_pool) != VK_SUCCESS) {
+            lava::log()->error("failed to create query pool");
+            this->loading_state.write()->set_step(LoadingState::Step::ERROR);
+            return;
+        }
+    }
 
     auto queue = this->device->queues()[queue_indices::TRANSFER];
     VkCommandPoolCreateInfo pool_info{
@@ -327,16 +369,37 @@ void Dataset::load(std::size_t staging_buffer_count) {
                 continue;
             }
 
+            if (slice_loaded_by_staging_buffer[i].has_value()) {
+                std::array<std::uint64_t, 2> timestamps;
+
+                if (vkGetQueryPoolResults(this->device->get(), query_pool, i * 2, 2, sizeof(timestamps), timestamps.data(), sizeof(timestamps[0]), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) != VK_SUCCESS) {
+                    lava::log()->error("failed to receive gpu times!");
+                    this->loading_state.write()->set_step(LoadingState::Step::ERROR);
+                    return;
+                }
+
+                const float timestamp_period = this->device->get_properties().limits.timestampPeriod;
+                const double duration_ns = (timestamps[1] - timestamps[0]) * (double)timestamp_period;
+                const double duration_ms = duration_ns / 1000.0 / 1000.0;
+                fmt::print(log_file, "{},,{}\n", *slice_loaded_by_staging_buffer[i], duration_ms);
+                slice_loaded_by_staging_buffer[i].reset();
+            }
+
             const std::size_t image_index = this->images.size();
             const std::size_t channel_index = image_index / this->data->dimensions[3];
             const std::size_t time_slice_index = image_index % this->data->dimensions[3];
             lava::log()->debug("load slice {} of channel {}", time_slice_index, channel_index);
 
-            lava::timer sw;
-            this->data->read_time_slice(channel_index, time_slice_index, buffer.allocation_info.pMappedData);
-            lava::log()->info("data read ({} ms)", sw.elapsed().count());
+            slice_loaded_by_staging_buffer[i] = image_index;
 
-            sw.reset();
+            const auto t0 = std::chrono::steady_clock::now();
+            this->data->read_time_slice(channel_index, time_slice_index, buffer.allocation_info.pMappedData);
+            std::chrono::duration<double, std::milli> slice_read_time = std::chrono::steady_clock::now() - t0;
+
+            lava::log()->info("data read ({} ms)", slice_read_time.count());
+            fmt::print(log_file, "{},{}\n", image_index, slice_read_time.count());
+
+            lava::timer sw;
             auto& image = this->images.emplace_back();
             if (!image.create(device, data, this->sampler)) {
                 lava::log()->error("failed to allocate image");
@@ -358,6 +421,8 @@ void Dataset::load(std::size_t staging_buffer_count) {
                 this->loading_state.write()->set_step(LoadingState::Step::ERROR);
                 return;
             }
+
+            vkCmdResetQueryPool(command_buffer, query_pool, i * 2, 2);
 
             // Memory barrier to -> (VK_ACCESS_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
             {
@@ -403,31 +468,10 @@ void Dataset::load(std::size_t staging_buffer_count) {
                 },
             };
 
+            vkCmdWriteTimestamp(command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, query_pool, i * 2 + 0);
             vkCmdCopyBufferToImage(command_buffer, buffer.buffer, image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            vkCmdWriteTimestamp(command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, query_pool, i * 2 + 1);
 
-            // Memory barrier (VK_ACCESS_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) -> (VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-            // {
-            //     VkImageMemoryBarrier barrier{
-            //         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            //         .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-            //         .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
-            //         .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            //         .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            //         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            //         .dstQueueFamilyIndex = this->device->get_queues()[0].family,
-            //         .image = image.image,
-            //         .subresourceRange = VkImageSubresourceRange{
-            //             .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            //             .baseMipLevel = 0,
-            //             .levelCount = 1,
-            //             .baseArrayLayer = 0,
-            //             .layerCount = 1,
-            //         },
-            //     };
-            //     vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-            // }
-            //
-            //
             if (vkEndCommandBuffer(command_buffer) != VK_SUCCESS) {
                 lava::log()->error("failed to end command buffer");
                 this->loading_state.write()->set_step(LoadingState::Step::ERROR);
@@ -474,11 +518,30 @@ void Dataset::load(std::size_t staging_buffer_count) {
         }
     }
 
+    for (std::size_t i = 0; i < staging_buffer_count; ++i) {
+        if (slice_loaded_by_staging_buffer[i].has_value()) {
+            std::array<std::uint64_t, 2> timestamps;
+
+            if (vkGetQueryPoolResults(this->device->get(), query_pool, i * 2, 2, sizeof(timestamps), timestamps.data(), sizeof(timestamps[0]), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) != VK_SUCCESS) {
+                lava::log()->error("failed to receive gpu times!");
+                this->loading_state.write()->set_step(LoadingState::Step::ERROR);
+                return;
+            }
+
+            const float timestamp_period = this->device->get_properties().limits.timestampPeriod;
+            const double duration_ns = (timestamps[1] - timestamps[0]) * (double)timestamp_period;
+            const double duration_ms = duration_ns / 1000.0 / 1000.0;
+            fmt::print(log_file, "{},,{}\n", *slice_loaded_by_staging_buffer[i], duration_ms);
+            slice_loaded_by_staging_buffer[i].reset();
+        }
+    }
+
     this->device->vkFreeCommandBuffers(command_pool, staging_command_buffers.size(), staging_command_buffers.data());
     this->device->vkDestroyCommandPool(command_pool);
     for (auto& fence : staging_fences) {
         this->device->vkDestroyFence(fence);
     }
+    this->device->call().vkDestroyQueryPool(this->device->get(), query_pool, nullptr);
 
     this->loading_time.exchange(loading_timer.elapsed());
     lava::log()->info("load dataset ({} s)", this->loading_time.load().count() / 1000.0);

@@ -2,6 +2,7 @@
 
 #include "dataset.hpp"
 #include "liblava/resource/buffer.hpp"
+#include "command_parser.hpp"
 #include <iterator>
 #include <liblava/block/compute_pipeline.hpp>
 #include <liblava/block/render_pass.hpp>
@@ -24,7 +25,7 @@ class Integrator {
     void imgui();
     void set_dataset(Dataset::Ptr dataset);
     bool integration_in_progress();
-    void check_for_integration();
+    bool check_for_integration();
 
     bool create(lava::app& app);
     void destroy();
@@ -86,6 +87,9 @@ class Integrator {
     };
     std::optional<Integration> integration;
 
+    std::ofstream log_file;
+    unsigned int run;
+
     // Compute
     lava::buffer::ptr max_velocity_magnitude_buffer;
     lava::device_p device;
@@ -116,13 +120,16 @@ class Integrator {
     float line_velocity_max = 1.0f;
 
     // Integration settings
+    CommandParser command_parser;
     glm::uvec3 work_group_size = {8, 1, 1};
     glm::uvec3 seed_spawn = {20, 20, 20};
     float delta_time = 0.1;
     unsigned int integration_steps = 10000;
     unsigned int batch_size = 100;
     bool explicit_interpolation = false;
+    bool analytic_dataset = false;
     bool should_integrate = false;
+    uint32_t repetitions_remaining = 0;
 
     std::thread integration_thread;
 

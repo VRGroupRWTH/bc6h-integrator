@@ -15,7 +15,7 @@ bool Application::setup() {
         device_param.features.multiDrawIndirect = true;
         // device_param.queue_family_infos[0].queues[0].priority = 1.0;
         device_param.add_queue(VK_QUEUE_COMPUTE_BIT, 1.0);
-        device_param.add_queue(VK_QUEUE_TRANSFER_BIT, 1.0);
+        device_param.add_queue(VK_QUEUE_TRANSFER_BIT | VK_QUEUE_COMPUTE_BIT, 1.0);
     };
 
     if (!this->engine.setup()) {
@@ -51,8 +51,8 @@ bool Application::setup() {
         if (this->engine.camera.activated()) {
             this->engine.camera.update_view(dt, this->engine.input.get_mouse_position());
         }
-        this->integrator->check_for_integration();
-        return true;
+
+        return this->integrator->check_for_integration();
     };
 
     this->engine.on_process = [this](VkCommandBuffer command_buffer, lava::index frame) {
@@ -132,7 +132,7 @@ void Application::imgui() {
     if (ImGui::Begin("General")) {
         if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
             glm::vec3 background_color = this->engine.shading.get_pass()->get_clear_color();
-            if (ImGui::ColorEdit4("Background Color", glm::value_ptr(background_color))) {
+            if (ImGui::ColorEdit3("Background Color", glm::value_ptr(background_color))) {
                 this->engine.shading.get_pass()->set_clear_color(background_color);
             }
             ImGui::DragFloat3("Position", glm::value_ptr(this->engine.camera.position));

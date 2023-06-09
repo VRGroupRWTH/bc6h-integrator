@@ -1,0 +1,5 @@
+#version 450 core
+#extension GL_GOOGLE_include_directive : require
+
+#define DATA_ANALYTIC
+#include "integration.glsl"
