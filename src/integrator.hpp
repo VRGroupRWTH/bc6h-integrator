@@ -79,7 +79,8 @@ class Integrator {
         double gpu_time = 0.0;
         double cpu_time = 0.0;
 
-        bool complete = false;
+        bool seeding_complete = false;
+        bool integration_complete = false;
 
         bool create_buffers(glm::uvec3 seed_spawn, std::uint32_t integration_steps, lava::device_p device, const lava::queue& compute_queue);
         void update_descriptor_set(lava::device_p device, VkDescriptorSet descriptor_set);
