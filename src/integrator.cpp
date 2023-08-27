@@ -161,8 +161,8 @@ bool Integrator::check_for_integration() {
 
     if (this->command_parser.get_repetition_count().has_value() && this->repetitions_remaining == 0) {
         lava::log()->debug("final repetition complete closing application");
-        std::exit(0);
-        return false;
+        this->app->shut_down();
+        return true;
     }
 
     if (this->should_integrate || this->repetitions_remaining > 0) {
