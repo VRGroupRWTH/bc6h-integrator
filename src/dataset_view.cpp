@@ -106,27 +106,27 @@ void DatasetView::destroy() {
 }
 
 void DatasetView::render(VkCommandBuffer command_buffer) {
-    if (!this->visible || !this->dataset) {
-        return;
-    }
+    // if (!this->visible || !this->dataset) {
+    //     return;
+    // }
 
-    const bool dataset_loaded = this->dataset->loaded();
-    if (dataset_loaded) {
-        if (this->descriptor_sets.size() == 0) {
-            this->allocate_descriptor_sets();
-        }
+    // const bool dataset_loaded = this->dataset->loaded();
+    // if (dataset_loaded) {
+    //     if (this->descriptor_sets.size() == 0) {
+    //         this->allocate_descriptor_sets();
+    //     }
 
-        Constants c{
-            .minimum = this->min,
-            .difference = this->max - this->min,
-            .depth = static_cast<float>(this->z_slice - 1) / (this->dataset->data->dimensions.z - 1),
-            .channel_count = this->dataset->data->channel_count,
-        };
+    //     Constants c{
+    //         .minimum = this->min,
+    //         .difference = this->max - this->min,
+    //         .depth = static_cast<float>(this->z_slice - 1) / (this->dataset->data->dimensions.z - 1),
+    //         .channel_count = this->dataset->data->channel_count,
+    //     };
 
-        this->pipeline_layout->bind(command_buffer, this->descriptor_sets[this->t_slice - 1]);
-        vkCmdPushConstants(command_buffer, this->pipeline_layout->get(), VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(Constants), &c);
-        this->quad->bind_draw(command_buffer);
-    }
+    //     this->pipeline_layout->bind(command_buffer, this->descriptor_sets[this->t_slice - 1]);
+    //     vkCmdPushConstants(command_buffer, this->pipeline_layout->get(), VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(Constants), &c);
+    //     this->quad->bind_draw(command_buffer);
+    // }
 }
 
 void DatasetView::imgui() {
@@ -144,48 +144,48 @@ void DatasetView::set_dataset(Dataset::Ptr dataset) {
 }
 
 void DatasetView::allocate_descriptor_sets() {
-    assert(this->descriptor);
-    assert(this->descriptor_pool);
-    assert(this->descriptor_sets.size() == 0);
+    // assert(this->descriptor);
+    // assert(this->descriptor_pool);
+    // assert(this->descriptor_sets.size() == 0);
 
-    const auto num_time_slices = this->dataset->data->dimensions.w;
-    this->descriptor_sets.reserve(num_time_slices);
-    std::vector<VkWriteDescriptorSet> descriptor_set_writes;
-    for (unsigned t = 0; t < num_time_slices; ++t) {
-        auto descriptor_set = this->descriptor->allocate(this->descriptor_pool->get());
-        this->descriptor_sets.push_back(descriptor_set);
+    // const auto num_time_slices = this->dataset->data->dimensions.w;
+    // this->descriptor_sets.reserve(num_time_slices);
+    // std::vector<VkWriteDescriptorSet> descriptor_set_writes;
+    // for (unsigned t = 0; t < num_time_slices; ++t) {
+    //     auto descriptor_set = this->descriptor->allocate(this->descriptor_pool->get());
+    //     this->descriptor_sets.push_back(descriptor_set);
 
-        const bool single_channel = this->dataset->data->channel_count == 1;
+    //     const bool single_channel = this->dataset->data->channel_count == 1;
 
-        descriptor_set_writes.push_back(VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = descriptor_set,
-            .dstBinding = 0,
-            .dstArrayElement = 0,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .pImageInfo = &this->dataset->get_image(0, t).image_info
-        });
-        descriptor_set_writes.push_back(VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = descriptor_set,
-            .dstBinding = 0,
-            .dstArrayElement = 1,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .pImageInfo = &this->dataset->get_image(single_channel ? 0 : 1, t).image_info
-        });
-        descriptor_set_writes.push_back(VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = descriptor_set,
-            .dstBinding = 0,
-            .dstArrayElement = 2,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .pImageInfo = &this->dataset->get_image(single_channel ? 0 : 2, t).image_info
-        });
-    }
-    this->device->vkUpdateDescriptorSets(descriptor_set_writes.size(), descriptor_set_writes.data());
+    //     descriptor_set_writes.push_back(VkWriteDescriptorSet{
+    //         .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+    //         .dstSet = descriptor_set,
+    //         .dstBinding = 0,
+    //         .dstArrayElement = 0,
+    //         .descriptorCount = 1,
+    //         .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+    //         .pImageInfo = &this->dataset->get_image(0, t).image_info
+    //     });
+    //     descriptor_set_writes.push_back(VkWriteDescriptorSet{
+    //         .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+    //         .dstSet = descriptor_set,
+    //         .dstBinding = 0,
+    //         .dstArrayElement = 1,
+    //         .descriptorCount = 1,
+    //         .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+    //         .pImageInfo = &this->dataset->get_image(single_channel ? 0 : 1, t).image_info
+    //     });
+    //     descriptor_set_writes.push_back(VkWriteDescriptorSet{
+    //         .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+    //         .dstSet = descriptor_set,
+    //         .dstBinding = 0,
+    //         .dstArrayElement = 2,
+    //         .descriptorCount = 1,
+    //         .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+    //         .pImageInfo = &this->dataset->get_image(single_channel ? 0 : 2, t).image_info
+    //     });
+    // }
+    // this->device->vkUpdateDescriptorSets(descriptor_set_writes.size(), descriptor_set_writes.data());
 }
 
 void DatasetView::free_descriptor_sets() {

@@ -94,6 +94,10 @@ void Integrator::render(VkCommandBuffer command_buffer) {
         return;
     }
 
+    if (!this->integration->seeding_complete) {
+        return;
+    }
+
     const VkBool32 invert_colormap = this->line_colormap_invert;
 
     this->render_pipeline->bind(command_buffer);
@@ -142,7 +146,7 @@ void Integrator::set_dataset(Dataset::Ptr dataset) {
 }
 
 bool Integrator::integration_in_progress() {
-    return this->integration.has_value() && !this->integration->complete;
+    return this->integration.has_value() && !this->integration->integration_complete;
     // this->device->vkWaitForFences(1, &this->integration->command_buffer_fence, true, 0).value == VK_TIMEOUT;
 }
 
@@ -157,8 +161,8 @@ bool Integrator::check_for_integration() {
 
     if (this->command_parser.get_repetition_count().has_value() && this->repetitions_remaining == 0) {
         lava::log()->debug("final repetition complete closing application");
-        std::exit(0);
-        return false;
+        this->app->shut_down();
+        return true;
     }
 
     if (this->should_integrate || this->repetitions_remaining > 0) {
@@ -839,7 +843,8 @@ bool Integrator::integrate() {
 
     this->integration->cpu_time = 0.0;
     this->integration->gpu_time = 0.0;
-    this->integration->complete = false;
+    this->integration->seeding_complete = false;
+    this->integration->integration_complete = false;
     this->integration->batch_count = (this->integration_steps + this->batch_size - 1) / this->batch_size;
     this->integration->current_batch = 0;
 
@@ -854,7 +859,9 @@ bool Integrator::integrate() {
         return false;
     }
     fmt::print(this->log_file, "{},{},", this->integration->gpu_time, seeding_timer.elapsed().count());
+
     this->integration->gpu_time = 0.0;
+    this->integration->seeding_complete = true;
 
     lava::timer integration_timer;
     if (!this->perform_integration(command_buffer, fence, timer, constants)) {
@@ -863,7 +870,7 @@ bool Integrator::integrate() {
     fmt::print(this->log_file, "{},{}\n", this->integration->gpu_time, integration_timer.elapsed().count());
 
     this->integration->cpu_time = timer.elapsed().count();
-    this->integration->complete = true;
+    this->integration->integration_complete = true;
 
     vkFreeCommandBuffers(this->device->get(), this->command_pool, 1, &command_buffer);
     vkDestroyFence(this->device->get(), fence, lava::memory::instance().alloc());
@@ -877,7 +884,7 @@ bool Integrator::integrate() {
 bool Integrator::perform_seeding(VkCommandBuffer command_buffer, VkFence fence, lava::timer& timer, Constants& constants) {
     lava::log()->debug("start seeding");
 
-    bool result = this->submit_and_measure_command(command_buffer, fence, timer, [=]() {
+    bool result = this->submit_and_measure_command(command_buffer, fence, timer, [=, this]() {
         this->seeding_pipeline->bind(command_buffer);
         this->seeding_pipeline_layout->bind(command_buffer, this->descriptor_set, 0, {}, VK_PIPELINE_BIND_POINT_COMPUTE);
 
@@ -900,7 +907,7 @@ bool Integrator::perform_integration(VkCommandBuffer command_buffer, VkFence fen
 
         lava::log()->debug("batch (first_step = {}, step_count = {})", constants.first_step, constants.step_count);
 
-        bool result = this->submit_and_measure_command(command_buffer, fence, timer, [=]() {
+        bool result = this->submit_and_measure_command(command_buffer, fence, timer, [=, this]() {
             this->integration_pipeline->bind(command_buffer);
             this->integration_pipeline_layout->bind(command_buffer, this->descriptor_set, 0, {}, VK_PIPELINE_BIND_POINT_COMPUTE);
 
