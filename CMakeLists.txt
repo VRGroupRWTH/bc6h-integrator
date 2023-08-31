@@ -7,6 +7,16 @@ include(cmake/shaders.cmake)
 set(CMAKE_CXX_STANDARD 20)
 set(CXX_STANDARD_REQUIRED ON)
 
+# There is currently an issue with the comparison operators in nlohmann json
+# https://github.com/nlohmann/json/issues/3868
+# https://github.com/nlohmann/json/issues/3979
+add_compile_definitions(JSON_HAS_THREE_WAY_COMPARISON=0)
+
+# shaderc defaults to the static runtime on MSVC
+if (MSVC)
+  set(SHADERC_ENABLE_SHARED_CRT ON)
+endif (MVSC)
+
 CPMAddPackage("gh:liblava/liblava#0.7.3")
 CPMAddPackage("gh:soehrl/cpp-sync#feature/rename-namespace")
 CPMAddPackage(NAME colormap GIT_REPOSITORY https://github.com/kbinani/colormap-shaders GIT_TAG master DOWNLOAD_ONLY YES)
