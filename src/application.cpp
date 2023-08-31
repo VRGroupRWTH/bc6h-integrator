@@ -156,9 +156,6 @@ void Application::imgui() {
         }
 
         if (this->dataset && this->dataset->loaded()) {
-            if (this->view && ImGui::CollapsingHeader("Debug View", ImGuiTreeNodeFlags_DefaultOpen)) {
-                this->view->imgui();
-            }
             if (this->integrator && ImGui::CollapsingHeader("Integration", ImGuiTreeNodeFlags_DefaultOpen)) {
                 this->integrator->imgui();
             }
