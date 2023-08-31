@@ -262,16 +262,16 @@ void Integrator::imgui() {
             "IDL_CB-Spectral",
             "transform_rainbow"};
 
-        ImGui::Combo("Line Colormap", (int32_t*)&this->line_colormap, line_colormap_names.data(), line_colormap_names.size());
+        ImGui::Combo("Colormap", (int32_t*)&this->line_colormap, line_colormap_names.data(), line_colormap_names.size());
 
         if (this->line_colormap == 0) {
-            ImGui::ColorEdit4("Line Color", glm::value_ptr(this->line_color));
+            ImGui::ColorEdit4("Color", glm::value_ptr(this->line_color));
         }
 
         else {
-            ImGui::Checkbox("Line Colormap Invert", &this->line_colormap_invert);
-            ImGui::DragFloat("Line Velocity Min", &this->line_velocity_min, 0.01f);
-            ImGui::DragFloat("Line Velocity Max", &this->line_velocity_max, 0.01f);
+            ImGui::Checkbox("Invert", &this->line_colormap_invert);
+            ImGui::DragFloat("Velocity Min", &this->line_velocity_min, 0.01f);
+            ImGui::DragFloat("Velocity Max", &this->line_velocity_max, 0.01f);
         }
 
         ImGui::DragFloat("Line Width", &this->line_width, 0.025f, 0.1, 10.0f);
