@@ -1,5 +1,5 @@
 # BC6H Integrator
-This repository contains the source for the BC6H integration method as published in the paper [Leveraging BC6H Texture Compression and Filtering for Efficient Vector Field Visualization]().
+This repository contains the source for the BC6H integration method as published in the paper [Leveraging BC6H Texture Compression and Filtering for Efficient Vector Field Visualization](https://diglib.eg.org/bitstream/handle/10.2312/vmv20231238/157-164.pdf).
 
 ![Screenshot of the bc6h-integrator application](screenshot.png "BC6H-Integrator Screenshot")
 
